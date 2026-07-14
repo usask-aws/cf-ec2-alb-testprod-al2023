@@ -5,6 +5,15 @@ Balancer. The default (port 80, and port 443 if a certificate is provided)
 listener forwards to the **prod** target group; requests matching the
 `/test/*` path pattern are routed to the **test** target group instead.
 
+## Before uploading: update the UserData script
+
+The template's `TestEC2Instance` and `ProdEC2Instance` resources each embed a
+`UserData` bootstrap script (installs `httpd`, writes a placeholder
+`index.php` and `/health` page). This is a **placeholder** — edit the
+`UserData` block for each instance in the YAML to install and configure your
+actual application before uploading the template, otherwise the instances
+will only ever serve the sample "Test Works" / "Prod Works" pages.
+
 ## Deploy from the AWS Console
 
 1. Sign in to the AWS Console for the target account and switch to the
@@ -14,9 +23,9 @@ listener forwards to the **prod** target group; requests matching the
 4. Under **Prerequisite - Prepare template**, select **Choose an existing
    template**.
 5. Under **Specify template**, select **Upload a template file**, click
-   **Choose file**, and select
-   `Usask_EC2_Loadbalancer_Test_Prod_cloudformation_template.yaml` from this
-   repo. Click **Next**.
+   **Choose file**, and select your edited
+   `Usask_EC2_Loadbalancer_Test_Prod_cloudformation_template.yaml`. Click
+   **Next**.
 6. On **Specify stack details**:
    - Enter a **Stack name** (e.g. `usask-ec2-alb-test-prod`).
    - Fill in the parameters:
@@ -26,10 +35,10 @@ listener forwards to the **prod** target group; requests matching the
      | `InstanceTypeTest` / `InstanceTypeProd` | Default `t2.micro` |
      | `TestSubnetId` | Subnet for the test instance |
      | `ProdSubnetId` | Subnet for the prod instance |
-     | `LoadBalancerSubnetIds` | Select **two** subnets (different AZs) for the ALB |
+     | `LoadBalancerSubnetIds` | Must select exactly **two** subnets, in different AZs, and both must be **public** subnets |
      | `InstanceProfileName` | Name of an existing IAM instance profile (defaults to `DefaultEC2InstanceProfile`) |
      | `KeyPairName` | Optional — leave blank to disable SSH access |
-     | `TestEC2Name` / `ProdEC2Name` | Name tags for each instance |
+     | `TestEC2Name` / `ProdEC2Name` | Sets the instance's `Name` tag — use a descriptive instance name (e.g. `myapp-test`, `myapp-prod`) rather than the default placeholder |
      | `VpcId` | VPC containing the subnets above |
      | `LoadBalancerName` | Name of the ALB |
      | `TestTargetGroupName` / `ProdTargetGroupName` | Target group names |
@@ -53,17 +62,44 @@ shows status **Issued** in the ACM console, come back and **update** the
 stack with the certificate's ARN in `CertificateArn`; this adds the HTTPS
 listener on port 443 without needing to recreate the stack.
 
-## After deploying
+## Verify the deployment in the console
 
-Open the stack in the CloudFormation console and check the **Outputs** tab
-for:
+1. **CloudFormation** → open the stack → **Outputs** tab → note
+   `LoadBalancerDNSName`, `TestEC2InstanceId`, `ProdEC2InstanceId`,
+   `TestTargetGroupArn`, `ProdTargetGroupArn`.
+2. **EC2 → Instances** → confirm `TestEC2InstanceId` and `ProdEC2InstanceId`
+   both show **Status check: 2/2 checks passed**.
+3. **EC2 → Target Groups** → open the test and prod target groups → check
+   the **Targets** tab → confirm each registered instance shows
+   **Health status: healthy**. If a target is `unhealthy`, verify the
+   instance's UserData actually started the app and serves the
+   `HealthCheckPath`.
+4. **EC2 → Load Balancers** → open the ALB → confirm **State: Active**, and
+   check the **Listeners and rules** tab to confirm the `/test/*` rule
+   exists on the correct listener (HTTPS listener if a certificate was
+   supplied, otherwise HTTP).
 
-- `LoadBalancerDNSName` — the ALB's public DNS name.
-  - `http://<LoadBalancerDNSName>/` → routes to the **prod** instance.
-  - `http://<LoadBalancerDNSName>/test/` → routes to the **test** instance.
-- `TestEC2InstanceId` / `ProdEC2InstanceId` — instance IDs.
-- `TestTargetGroupArn` / `ProdTargetGroupArn` — target group ARNs.
-- `EC2SecurityGroupId` / `LoadBalancerSecurityGroupId` — security group IDs.
+## Load-test the prod and test sites via the ALB DNS name
+
+Using the `LoadBalancerDNSName` output value (e.g.
+`App-ALB-123456789.us-east-1.elb.amazonaws.com`):
+
+- **Prod site**: open `http://<LoadBalancerDNSName>/` (or `https://` if a
+  certificate is configured) in a browser, or run:
+  ```bash
+  curl -i http://<LoadBalancerDNSName>/
+  ```
+  This should return the prod instance's response (default listener action
+  forwards here).
+- **Test site**: open `http://<LoadBalancerDNSName>/test/` in a browser, or
+  run:
+  ```bash
+  curl -i http://<LoadBalancerDNSName>/test/
+  ```
+  This matches the `/test/*` path-pattern rule and should return the test
+  instance's response instead.
+- If either request fails or times out, recheck the target group health
+  (step 3 above) and confirm `AllowedHttpCidr` includes your client's IP/CIDR.
 
 ## Updating or deleting the stack
 
