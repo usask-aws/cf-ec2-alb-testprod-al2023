@@ -1,0 +1,324 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Test and Prod EC2 instances with one Application Load Balancer
+
+Parameters:
+  AmiIdTest:
+    Type: AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>
+    Default: /aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-x86_64
+    Description: 'Amazon machine image ID for test environment'
+
+  AmiIdProd:
+    Type: AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>
+    Default: /aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-x86_64
+    Description: 'Amazon machine image ID for prod environment'
+
+  InstanceTypeTest:
+    Type: String
+    Default: t2.micro
+    Description: 'Instance type for test environment'
+
+  InstanceTypeProd:
+    Type: String
+    Default: t2.micro
+    Description: 'Instance type for prod environment'
+
+  TestSubnetId:
+    Type: AWS::EC2::Subnet::Id
+    Description: 'Subnet ID for test environment (ideally private)'
+
+  ProdSubnetId:
+    Type: AWS::EC2::Subnet::Id
+    Description: 'Subnet ID for prod environment (ideally private)'
+
+  LoadBalancerSubnetIds:
+    Type: List<AWS::EC2::Subnet::Id>
+    Description: 'Subnet IDs(2) for loadbalancer (ideally public)'
+
+  InstanceProfileName:
+    Type: String
+    Default: DefaultEC2InstanceProfile
+    Description: 'Instance profile name'
+
+  KeyPairName:
+    Type: 'String'
+    Default: ""
+    Description: 'Optional: Select an existing EC2 Key Pair to enable SSH access'
+
+  TestEC2Name:
+    Type: String
+    Default: Test-EC2-Instance
+
+  ProdEC2Name:
+    Type: String
+    Default: Prod-EC2-Instance
+
+  VpcId:
+    Type: AWS::EC2::VPC::Id
+
+  LoadBalancerName:
+    Type: String
+    Default: App-ALB
+
+  TestTargetGroupName:
+    Type: String
+    Default: Test-App-TG
+
+  ProdTargetGroupName:
+    Type: String
+    Default: Prod-App-TG
+
+  AppPort:
+    Type: Number
+    Default: 80
+
+  HealthCheckPath:
+    Type: String
+    Default: /health
+
+  AllowedHttpCidr:
+    Type: String
+    Default: 0.0.0.0/0
+
+  CertificateArn:
+    Type: String
+    Default: ""
+
+Conditions:
+  HasKeyPair: !Not [ !Equals [ !Ref KeyPairName, "" ] ]
+  HasCertificate: !Not [ !Equals [ !Ref CertificateArn, "" ] ]
+
+Resources:
+  LoadBalancerSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Security group for Application Load Balancer
+      VpcId: !Ref VpcId
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: !Ref AllowedHttpCidr
+        - !If
+          - HasCertificate
+          - IpProtocol: tcp
+            FromPort: 443
+            ToPort: 443
+            CidrIp: !Ref AllowedHttpCidr
+          - !Ref AWS::NoValue
+      Tags:
+        - Key: Name
+          Value: !Sub '${LoadBalancerName}-SG'
+
+  EC2SecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Security group for EC2 instances
+      VpcId: !Ref VpcId
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: !Ref AppPort
+          ToPort: !Ref AppPort
+          SourceSecurityGroupId: !Ref LoadBalancerSecurityGroup
+      SecurityGroupEgress:
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: 0.0.0.0/0
+        - IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          CidrIp: 0.0.0.0/0
+      Tags:
+        - Key: Name
+          Value: EC2-App-SG
+
+  LoadBalancerSecurityGroupEgressToEC2:
+    Type: AWS::EC2::SecurityGroupEgress
+    Properties:
+      GroupId: !Ref LoadBalancerSecurityGroup
+      IpProtocol: tcp
+      FromPort: !Ref AppPort
+      ToPort: !Ref AppPort
+      DestinationSecurityGroupId: !Ref EC2SecurityGroup
+
+  TestEC2Instance:
+    Type: AWS::EC2::Instance
+    Properties:
+      ImageId: !Ref AmiIdTest
+      InstanceType: !Ref InstanceTypeTest
+      IamInstanceProfile: !Ref InstanceProfileName
+      KeyName: !If
+        - HasKeyPair
+        - !Ref KeyPairName
+        - !Ref AWS::NoValue
+      Monitoring: true
+      MetadataOptions:
+        HttpTokens: required
+        HttpPutResponseHopLimit: 2
+        HttpEndpoint: enabled
+      NetworkInterfaces:
+        - DeviceIndex: "0"
+          SubnetId: !Ref TestSubnetId
+          AssociatePublicIpAddress: false
+          GroupSet:
+            - !Ref EC2SecurityGroup
+      UserData:
+        Fn::Base64: !Sub |
+          #!/bin/bash
+          dnf update -y
+          dnf install -y httpd php php-cli tree
+          systemctl enable httpd
+          systemctl start httpd
+          echo "Test Works" > /var/www/html/index.php
+          echo "OK" > /var/www/html/health
+          mkdir -p /var/www/html/test
+          echo "Test Works" > /var/www/html/test/index.php
+          echo "OK" > /var/www/html/test/health
+
+      Tags:
+        - Key: Name
+          Value: !Ref TestEC2Name
+        - Key: Environment
+          Value: test
+
+  ProdEC2Instance:
+    Type: AWS::EC2::Instance
+    Properties:
+      ImageId: !Ref AmiIdProd
+      InstanceType: !Ref InstanceTypeProd
+      IamInstanceProfile: !Ref InstanceProfileName
+      KeyName: !If
+        - HasKeyPair
+        - !Ref KeyPairName
+        - !Ref AWS::NoValue
+      Monitoring: true
+      MetadataOptions:
+        HttpTokens: required
+        HttpPutResponseHopLimit: 2
+        HttpEndpoint: enabled
+      NetworkInterfaces:
+        - DeviceIndex: "0"
+          SubnetId: !Ref ProdSubnetId
+          AssociatePublicIpAddress: false
+          GroupSet:
+            - !Ref EC2SecurityGroup
+      UserData:
+        Fn::Base64: !Sub |
+          #!/bin/bash
+          dnf update -y
+          dnf install -y httpd php php-cli tree
+          systemctl enable httpd
+          systemctl start httpd
+          echo "Prod Works" > /var/www/html/index.php
+          echo "OK" > /var/www/html/health
+      Tags:
+        - Key: Name
+          Value: !Ref ProdEC2Name
+        - Key: Environment
+          Value: prod
+
+  ApplicationLoadBalancer:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Properties:
+      Name: !Ref LoadBalancerName
+      Scheme: internet-facing
+      Type: application
+      IpAddressType: ipv4
+      SecurityGroups:
+        - !Ref LoadBalancerSecurityGroup
+      Subnets: !Ref LoadBalancerSubnetIds
+
+  TestTargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      Name: !Ref TestTargetGroupName
+      VpcId: !Ref VpcId
+      Protocol: HTTP
+      Port: !Ref AppPort
+      TargetType: instance
+      HealthCheckProtocol: HTTP
+      HealthCheckPath: !Ref HealthCheckPath
+      HealthCheckPort: traffic-port
+      Matcher:
+        HttpCode: 200-399
+      Targets:
+        - Id: !Ref TestEC2Instance
+          Port: !Ref AppPort
+
+  ProdTargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      Name: !Ref ProdTargetGroupName
+      VpcId: !Ref VpcId
+      Protocol: HTTP
+      Port: !Ref AppPort
+      TargetType: instance
+      HealthCheckProtocol: HTTP
+      HealthCheckPath: !Ref HealthCheckPath
+      HealthCheckPort: traffic-port
+      Matcher:
+        HttpCode: 200-399
+      Targets:
+        - Id: !Ref ProdEC2Instance
+          Port: !Ref AppPort
+
+  ApplicationListener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      LoadBalancerArn: !Ref ApplicationLoadBalancer
+      Port: 80
+      Protocol: HTTP
+      DefaultActions:
+        - Type: forward
+          TargetGroupArn: !Ref ProdTargetGroup
+
+  HttpsApplicationListener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Condition: HasCertificate
+    Properties:
+      LoadBalancerArn: !Ref ApplicationLoadBalancer
+      Port: 443
+      Protocol: HTTPS
+      Certificates:
+        - CertificateArn: !Ref CertificateArn
+      DefaultActions:
+        - Type: forward
+          TargetGroupArn: !Ref ProdTargetGroup
+
+  TestListenerRule:
+    Type: AWS::ElasticLoadBalancingV2::ListenerRule
+    Properties:
+      ListenerArn: !If
+        - HasCertificate
+        - !Ref HttpsApplicationListener
+        - !Ref ApplicationListener
+      Priority: 10
+      Conditions:
+        - Field: path-pattern
+          Values:
+            - /test/*
+      Actions:
+        - Type: forward
+          TargetGroupArn: !Ref TestTargetGroup
+
+Outputs:
+  TestEC2InstanceId:
+    Value: !Ref TestEC2Instance
+
+  ProdEC2InstanceId:
+    Value: !Ref ProdEC2Instance
+
+  EC2SecurityGroupId:
+    Value: !Ref EC2SecurityGroup
+
+  LoadBalancerSecurityGroupId:
+    Value: !Ref LoadBalancerSecurityGroup
+
+  LoadBalancerDNSName:
+    Value: !GetAtt ApplicationLoadBalancer.DNSName
+
+  TestTargetGroupArn:
+    Value: !Ref TestTargetGroup
+
+  ProdTargetGroupArn:
+    Value: !Ref ProdTargetGroup
