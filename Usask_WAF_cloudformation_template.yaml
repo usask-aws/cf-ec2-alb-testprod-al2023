@@ -1,0 +1,130 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Create AWS WAF Web ACL with optional AWS managed rules, metrics enabled, and associate with an existing ALB
+
+Parameters:
+  WebACLName:
+    Type: String
+    Default: Standalone-App-WAF
+
+  LoadBalancerArn:
+    Description: ARN of the existing Application Load Balancer
+    Type: String
+
+  EnableCommonRuleSet:
+    Type: String
+    Default: "true"
+    AllowedValues:
+      - "true"
+      - "false"
+
+  EnableKnownBadInputsRuleSet:
+    Type: String
+    Default: "true"
+    AllowedValues:
+      - "true"
+      - "false"
+
+  EnableAmazonIpReputationList:
+    Type: String
+    Default: "true"
+    AllowedValues:
+      - "true"
+      - "false"
+
+  EnableCloudWatchMetrics:
+    Type: String
+    Default: "true"
+    AllowedValues:
+      - "true"
+      - "false"
+
+  EnableSampledRequests:
+    Type: String
+    Default: "true"
+    AllowedValues:
+      - "true"
+      - "false"
+
+Conditions:
+  UseCommonRuleSet: !Equals [!Ref EnableCommonRuleSet, "true"]
+  UseKnownBadInputsRuleSet: !Equals [!Ref EnableKnownBadInputsRuleSet, "true"]
+  UseAmazonIpReputationList: !Equals [!Ref EnableAmazonIpReputationList, "true"]
+  UseCloudWatchMetrics: !Equals [!Ref EnableCloudWatchMetrics, "true"]
+  UseSampledRequests: !Equals [!Ref EnableSampledRequests, "true"]
+
+Resources:
+  WebACL:
+    Type: AWS::WAFv2::WebACL
+    Properties:
+      Name: !Ref WebACLName
+      Scope: REGIONAL
+      DefaultAction:
+        Allow: {}
+      VisibilityConfig:
+        CloudWatchMetricsEnabled: !If [UseCloudWatchMetrics, true, false]
+        MetricName: !Ref WebACLName
+        SampledRequestsEnabled: !If [UseSampledRequests, true, false]
+      Rules:
+        - !If
+          - UseCommonRuleSet
+          - Name: CommonRuleSet
+            Priority: 10
+            OverrideAction:
+              None: {}
+            Statement:
+              ManagedRuleGroupStatement:
+                VendorName: AWS
+                Name: AWSManagedRulesCommonRuleSet
+            VisibilityConfig:
+              CloudWatchMetricsEnabled: !If [UseCloudWatchMetrics, true, false]
+              MetricName: CommonRuleSet
+              SampledRequestsEnabled: !If [UseSampledRequests, true, false]
+          - !Ref AWS::NoValue
+
+        - !If
+          - UseKnownBadInputsRuleSet
+          - Name: KnownBadInputs
+            Priority: 20
+            OverrideAction:
+              None: {}
+            Statement:
+              ManagedRuleGroupStatement:
+                VendorName: AWS
+                Name: AWSManagedRulesKnownBadInputsRuleSet
+            VisibilityConfig:
+              CloudWatchMetricsEnabled: !If [UseCloudWatchMetrics, true, false]
+              MetricName: KnownBadInputs
+              SampledRequestsEnabled: !If [UseSampledRequests, true, false]
+          - !Ref AWS::NoValue
+
+        - !If
+          - UseAmazonIpReputationList
+          - Name: IpReputation
+            Priority: 30
+            OverrideAction:
+              None: {}
+            Statement:
+              ManagedRuleGroupStatement:
+                VendorName: AWS
+                Name: AWSManagedRulesAmazonIpReputationList
+            VisibilityConfig:
+              CloudWatchMetricsEnabled: !If [UseCloudWatchMetrics, true, false]
+              MetricName: IpReputation
+              SampledRequestsEnabled: !If [UseSampledRequests, true, false]
+          - !Ref AWS::NoValue
+
+  WebACLAssociation:
+    Type: AWS::WAFv2::WebACLAssociation
+    Properties:
+      ResourceArn: !Ref LoadBalancerArn
+      WebACLArn: !GetAtt WebACL.Arn
+
+Outputs:
+  WebACLArn:
+    Value: !GetAtt WebACL.Arn
+
+  WebACLId:
+    Value: !GetAtt WebACL.Id
+
+  AssociatedLoadBalancerArn:
+    Value: !Ref LoadBalancerArn
