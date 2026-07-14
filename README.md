@@ -126,3 +126,89 @@ Using the `LoadBalancerDNSName` output value (e.g.
   Application Load Balancer, both target groups, both EC2 instances, and
   both security groups** — there is no way to recover them once the stack
   deletion completes.
+
+
+# Usask_WAF_cloudformation_template.yaml
+
+Creates a regional AWS WAF Web ACL (with AWS-managed rule groups) and
+associates it with an existing Application Load Balancer.
+
+## (Optional) stack — but mandatory for public web services
+
+This template is deployed as a **separate, standalone stack** from the ALB
+itself — CloudFormation does not require it, and the ALB will function
+without it. However, per team policy, **attaching this WAF Web ACL is
+mandatory for any internet-facing web service** (any ALB with
+`Scheme: internet-facing`, such as the one created by
+`Usask_EC2_Loadbalancer_Test_Prod_cloudformation_template.yaml`). Do not
+skip this step for a production or public-facing deployment — only
+internal/private-only load balancers may go without it.
+
+## Prerequisites
+
+- An existing **regional** Application Load Balancer already deployed (e.g.
+  via `Usask_EC2_Loadbalancer_cloudformation_template.yaml` or
+  `Usask_EC2_Loadbalancer_Test_Prod_cloudformation_template.yaml`) and its
+  ARN. The current Load Balancer templates don't expose the ALB ARN as a
+  stack Output — get it from the console instead:
+  **EC2 → Load Balancers → select the ALB → Description tab → ARN** (or copy
+  it from the **Load Balancer ARN** field).
+
+## Deploy from the AWS Console
+
+1. Sign in to the AWS Console for the target account and switch to the
+   correct region (top-right region selector) — WAF must be created in the
+   **same region** as the ALB (this template uses `Scope: REGIONAL`, not
+   `CLOUDFRONT`).
+2. Go to the **CloudFormation** service.
+3. Click **Create stack** → **With new resources (standard)**.
+4. Under **Prerequisite - Prepare template**, select **Choose an existing
+   template**.
+5. Under **Specify template**, select **Upload a template file**, click
+   **Choose file**, and select `Usask_WAF_cloudformation_template.yaml`.
+   Click **Next**.
+6. On **Specify stack details**:
+   - Enter a **Stack name** (e.g. `usask-waf-app-alb`).
+   - Fill in the parameters:
+     | Parameter | Notes |
+     |---|---|
+     | `WebACLName` | Name of the Web ACL (default `Standalone-App-WAF`) |
+     | `LoadBalancerArn` | ARN of the existing ALB (from Prerequisites above) |
+     | `EnableCommonRuleSet` | AWS Managed Common Rule Set — leave `true` unless you have a specific reason to disable it |
+     | `EnableKnownBadInputsRuleSet` | AWS Managed Known Bad Inputs Rule Set — leave `true` |
+     | `EnableAmazonIpReputationList` | AWS Managed Amazon IP Reputation List — leave `true` |
+     | `EnableCloudWatchMetrics` | Emits per-rule CloudWatch metrics — leave `true` for visibility |
+     | `EnableSampledRequests` | Stores a rolling sample of matched requests for troubleshooting — leave `true` |
+   - Click **Next**.
+7. On **Configure stack options**, leave defaults (add tags/permissions
+   boundary only if your account requires them) and click **Next**.
+8. On **Review**, scroll down and confirm the stack details, then click
+   **Submit**.
+9. Wait for the stack **Status** to reach `CREATE_COMPLETE`.
+
+## Verify the deployment in the console
+
+1. **CloudFormation** → open the stack → **Outputs** tab → note
+   `WebACLArn`, `WebACLId`, `AssociatedLoadBalancerArn`.
+2. **WAF & Shield** console → **Web ACLs** → select the Web ACL you created
+   → confirm the **Associated AWS resources** tab lists your ALB.
+3. Still on the Web ACL page, open the **Rules** tab and confirm the
+   managed rule groups you enabled are listed with **Action: Block/Count**
+   as expected (managed rule groups use their own internal action per rule
+   when `OverrideAction` is `None`).
+4. Send a request through the ALB and check the **Requests** /
+   **Sampled requests** tab a few minutes later to confirm traffic is being
+   evaluated (CloudWatch metrics may take a few minutes to appear under
+   **CloudWatch → Metrics → WAFV2**).
+
+## Updating or deleting the stack
+
+- **Update**: select the stack in CloudFormation → **Update** → **Replace
+  current template** (re-upload the YAML if it changed) or **Use current
+  template** (to change parameters only, e.g. toggling a rule group) →
+  adjust parameters → **Next** → **Submit**.
+- **Delete**: select the stack → **Delete** → confirm. **This removes the
+  Web ACL and its association with the ALB**, leaving the ALB
+  unprotected — if the ALB is internet-facing, redeploy WAF (or point it at
+  a replacement Web ACL) before leaving it in that state for any length of
+  time.
