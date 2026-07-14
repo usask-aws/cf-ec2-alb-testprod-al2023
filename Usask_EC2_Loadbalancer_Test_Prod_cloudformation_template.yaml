@@ -24,25 +24,30 @@ Parameters:
 
   TestSubnetId:
     Type: AWS::EC2::Subnet::Id
-    Description: 'Subnet ID for test environment (ideally private)'
+    Description: 'Subnet ID for test environment (MUST BE PRIVATE)'
 
   ProdSubnetId:
     Type: AWS::EC2::Subnet::Id
-    Description: 'Subnet ID for prod environment (ideally private)'
+    Description: 'Subnet ID for prod environment (MUST BE PRIVATE)'
 
   LoadBalancerSubnetIds:
     Type: List<AWS::EC2::Subnet::Id>
-    Description: 'Subnet IDs(2) for loadbalancer (ideally public)'
+    Description: 'Subnet IDs(TWO) for loadbalancer (MUST BE PUBLIC)'
 
   InstanceProfileName:
     Type: String
     Default: DefaultEC2InstanceProfile
     Description: 'Instance profile name'
 
-  KeyPairName:
+  KeyPairNameTest:
     Type: 'String'
     Default: ""
-    Description: 'Optional: Select an existing EC2 Key Pair to enable SSH access'
+    Description: 'Optional: Select an existing EC2 Key Pair to enable SSH access to the test instance'
+
+  KeyPairNameProd:
+    Type: 'String'
+    Default: ""
+    Description: 'Optional: Select an existing EC2 Key Pair to enable SSH access to the prod instance'
 
   TestEC2Name:
     Type: String
@@ -83,8 +88,45 @@ Parameters:
     Type: String
     Default: ""
 
+  DataVolumeTypeTest:
+    Type: String
+    Default: gp3
+    AllowedValues:
+      - gp3
+      - gp2
+      - io1
+      - io2
+      - st1
+      - sc1
+    Description: 'EBS volume type for the additional data volume attached to the test instance'
+
+  DataVolumeSizeTest:
+    Type: Number
+    Default: 20
+    MinValue: 1
+    Description: 'Size (GiB) of the additional data volume attached to the test instance'
+
+  DataVolumeTypeProd:
+    Type: String
+    Default: gp3
+    AllowedValues:
+      - gp3
+      - gp2
+      - io1
+      - io2
+      - st1
+      - sc1
+    Description: 'EBS volume type for the additional data volume attached to the prod instance'
+
+  DataVolumeSizeProd:
+    Type: Number
+    Default: 20
+    MinValue: 1
+    Description: 'Size (GiB) of the additional data volume attached to the prod instance'
+
 Conditions:
-  HasKeyPair: !Not [ !Equals [ !Ref KeyPairName, "" ] ]
+  HasKeyPairTest: !Not [ !Equals [ !Ref KeyPairNameTest, "" ] ]
+  HasKeyPairProd: !Not [ !Equals [ !Ref KeyPairNameProd, "" ] ]
   HasCertificate: !Not [ !Equals [ !Ref CertificateArn, "" ] ]
 
 Resources:
@@ -148,14 +190,21 @@ Resources:
       InstanceType: !Ref InstanceTypeTest
       IamInstanceProfile: !Ref InstanceProfileName
       KeyName: !If
-        - HasKeyPair
-        - !Ref KeyPairName
+        - HasKeyPairTest
+        - !Ref KeyPairNameTest
         - !Ref AWS::NoValue
       Monitoring: true
       MetadataOptions:
         HttpTokens: required
         HttpPutResponseHopLimit: 2
         HttpEndpoint: enabled
+      BlockDeviceMappings:
+        - DeviceName: /dev/sdf
+          Ebs:
+            VolumeType: !Ref DataVolumeTypeTest
+            VolumeSize: !Ref DataVolumeSizeTest
+            Encrypted: true
+            DeleteOnTermination: true
       NetworkInterfaces:
         - DeviceIndex: "0"
           SubnetId: !Ref TestSubnetId
@@ -165,15 +214,30 @@ Resources:
       UserData:
         Fn::Base64: !Sub |
           #!/bin/bash
+          DEVICE=/dev/xvdf
+          [ -e /dev/nvme1n1 ] && DEVICE=/dev/nvme1n1
+          MOUNT_POINT=/data
+          if ! blkid $DEVICE >/dev/null 2>&1; then
+            mkfs -t xfs $DEVICE
+          fi
+          mkdir -p $MOUNT_POINT
+          UUID=$(blkid -s UUID -o value $DEVICE)
+          grep -q "$UUID" /etc/fstab || echo "UUID=$UUID $MOUNT_POINT xfs defaults,nofail 0 2" >> /etc/fstab
+          mount -a
+
           dnf update -y
           dnf install -y httpd php php-cli tree
+
+          DOCROOT=$MOUNT_POINT/www/html
+          mkdir -p $DOCROOT/test
+          sed -i "s#/var/www/html#$DOCROOT#g" /etc/httpd/conf/httpd.conf
+          echo "Test Works" > $DOCROOT/index.php
+          echo "OK" > $DOCROOT/health
+          echo "Test Works" > $DOCROOT/test/index.php
+          echo "OK" > $DOCROOT/test/health
+
           systemctl enable httpd
           systemctl start httpd
-          echo "Test Works" > /var/www/html/index.php
-          echo "OK" > /var/www/html/health
-          mkdir -p /var/www/html/test
-          echo "Test Works" > /var/www/html/test/index.php
-          echo "OK" > /var/www/html/test/health
 
       Tags:
         - Key: Name
@@ -188,14 +252,21 @@ Resources:
       InstanceType: !Ref InstanceTypeProd
       IamInstanceProfile: !Ref InstanceProfileName
       KeyName: !If
-        - HasKeyPair
-        - !Ref KeyPairName
+        - HasKeyPairProd
+        - !Ref KeyPairNameProd
         - !Ref AWS::NoValue
       Monitoring: true
       MetadataOptions:
         HttpTokens: required
         HttpPutResponseHopLimit: 2
         HttpEndpoint: enabled
+      BlockDeviceMappings:
+        - DeviceName: /dev/sdf
+          Ebs:
+            VolumeType: !Ref DataVolumeTypeProd
+            VolumeSize: !Ref DataVolumeSizeProd
+            Encrypted: true
+            DeleteOnTermination: true
       NetworkInterfaces:
         - DeviceIndex: "0"
           SubnetId: !Ref ProdSubnetId
@@ -205,12 +276,28 @@ Resources:
       UserData:
         Fn::Base64: !Sub |
           #!/bin/bash
+          DEVICE=/dev/xvdf
+          [ -e /dev/nvme1n1 ] && DEVICE=/dev/nvme1n1
+          MOUNT_POINT=/data
+          if ! blkid $DEVICE >/dev/null 2>&1; then
+            mkfs -t xfs $DEVICE
+          fi
+          mkdir -p $MOUNT_POINT
+          UUID=$(blkid -s UUID -o value $DEVICE)
+          grep -q "$UUID" /etc/fstab || echo "UUID=$UUID $MOUNT_POINT xfs defaults,nofail 0 2" >> /etc/fstab
+          mount -a
+
           dnf update -y
           dnf install -y httpd php php-cli tree
+
+          DOCROOT=$MOUNT_POINT/www/html
+          mkdir -p $DOCROOT
+          sed -i "s#/var/www/html#$DOCROOT#g" /etc/httpd/conf/httpd.conf
+          echo "Prod Works" > $DOCROOT/index.php
+          echo "OK" > $DOCROOT/health
+
           systemctl enable httpd
           systemctl start httpd
-          echo "Prod Works" > /var/www/html/index.php
-          echo "OK" > /var/www/html/health
       Tags:
         - Key: Name
           Value: !Ref ProdEC2Name
