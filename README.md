@@ -14,6 +14,19 @@ The template's `TestEC2Instance` and `ProdEC2Instance` resources each embed a
 actual application before uploading the template, otherwise the instances
 will only ever serve the sample "Test Works" / "Prod Works" pages.
 
+Each instance also gets an additional EBS data volume (sized via
+`DataVolumeSizeTest`/`DataVolumeSizeProd`) that the same `UserData` script
+formats (XFS) and mounts at `/data` automatically on first boot, persisting
+the mount across reboots via `/etc/fstab`. If your application needs a
+different mount point, update the `MOUNT_POINT` value in the `UserData`
+block accordingly.
+
+`httpd`'s `DocumentRoot` is repointed from `/var/www/html` to
+`$MOUNT_POINT/www/html` (i.e. `/data/www/html` by default) before the
+service first starts, so all site content lives on the mounted EBS data
+volume rather than the instance's root volume. If you change
+`MOUNT_POINT`, the document root moves with it automatically.
+
 ## Deploy from the AWS Console
 
 1. Sign in to the AWS Console for the target account and switch to the
@@ -35,9 +48,9 @@ will only ever serve the sample "Test Works" / "Prod Works" pages.
      | `InstanceTypeTest` / `InstanceTypeProd` | Default `t2.micro` |
      | `TestSubnetId` | Subnet for the test instance |
      | `ProdSubnetId` | Subnet for the prod instance |
-     | `LoadBalancerSubnetIds` | Must select exactly **two** subnets, in different AZs, and both must be **public** subnets |
+     | `LoadBalancerSubnetIds` | Must select exactly **two** subnets, in different AZs, and both must be **public** subnets (have a route to an internet gateway) — the ALB is internet-facing and won't provision correctly in private subnets |
      | `InstanceProfileName` | Name of an existing IAM instance profile (defaults to `DefaultEC2InstanceProfile`) |
-     | `KeyPairName` | Optional — leave blank to disable SSH access |
+     | `KeyPairNameTest` / `KeyPairNameProd` | Optional, independent per instance — leave either blank to disable SSH access for that instance. Use different key pairs for test and prod if you want separate SSH credentials per environment |
      | `TestEC2Name` / `ProdEC2Name` | Sets the instance's `Name` tag — use a descriptive instance name (e.g. `myapp-test`, `myapp-prod`) rather than the default placeholder |
      | `VpcId` | VPC containing the subnets above |
      | `LoadBalancerName` | Name of the ALB |
@@ -46,6 +59,8 @@ will only ever serve the sample "Test Works" / "Prod Works" pages.
      | `HealthCheckPath` | Target group health check path (default `/health`) |
      | `AllowedHttpCidr` | CIDR allowed to reach the ALB (default `0.0.0.0/0`) |
      | `CertificateArn` | Optional — leave blank to deploy HTTP-only. See **HTTPS/ACM** note below |
+     | `DataVolumeTypeTest` / `DataVolumeSizeTest` | EBS volume type (default `gp3`) and size in GiB (default `20`) for the additional data volume attached to the test instance |
+     | `DataVolumeTypeProd` / `DataVolumeSizeProd` | EBS volume type (default `gp3`) and size in GiB (default `20`) for the additional data volume attached to the prod instance |
    - Click **Next**.
 7. On **Configure stack options**, leave defaults (add tags/permissions
    boundary only if your account requires them) and click **Next**.
