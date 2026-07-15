@@ -1,7 +1,7 @@
 # Usask_EC2_Loadbalancer_Test_Prod_cloudformation_template.yaml
 
-Creates a test/prod EC2 instance pair behind a single Application Load
-Balancer. The default (port 80, and port 443 if a certificate is provided)
+Creates a test and prod EC2 instance pair behind a single Application Load
+Balancer(ALB). The default (port 80, and port 443 if a certificate is provided)
 listener forwards to the **prod** target group; requests matching the
 `/test/*` path pattern are routed to the **test** target group instead.
 
@@ -9,7 +9,7 @@ listener forwards to the **prod** target group; requests matching the
 
 The template's `TestEC2Instance` and `ProdEC2Instance` resources each embed a
 `UserData` bootstrap script (installs `httpd`, writes a placeholder
-`index.php` and `/health` page). This is a **placeholder** — edit the
+`index.php` and `/health` page). This is a **placeholder** , edit the
 `UserData` block for each instance in the YAML to install and configure your
 actual application before uploading the template, otherwise the instances
 will only ever serve the sample "Test Works" / "Prod Works" pages.
@@ -40,25 +40,25 @@ volume rather than the instance's root volume. If you change
    `Usask_EC2_Loadbalancer_Test_Prod_cloudformation_template.yaml`. Click
    **Next**.
 6. On **Specify stack details**:
-   - Enter a **Stack name** (e.g. `usask-ec2-alb-test-prod`).
+   - Enter a **Stack name** (e.g. `ec2-alb-test-prod-stack`).
    - Fill in the parameters:
      | Parameter | Notes |
      |---|---|
      | `AmiIdTest` / `AmiIdProd` | Leave default to use the latest Amazon Linux 2023 AMI via SSM, or override |
      | `InstanceTypeTest` / `InstanceTypeProd` | Default `t2.micro` |
-     | `TestSubnetId` | Subnet for the test instance |
-     | `ProdSubnetId` | Subnet for the prod instance |
-     | `LoadBalancerSubnetIds` | Must select exactly **two** subnets, in different AZs, and both must be **public** subnets (have a route to an internet gateway) — the ALB is internet-facing and won't provision correctly in private subnets |
+     | `TestSubnetId` | Subnet for the test instance (MUST BE **PRIVATE**) |
+     | `ProdSubnetId` | Subnet for the prod instance (MUST BE **PRIVATE**) |
+     | `LoadBalancerSubnetIds` | Must select exactly **two** subnets, in different AZs, and both must be **PUBLIC** subnets
      | `InstanceProfileName` | Name of an existing IAM instance profile (defaults to `DefaultEC2InstanceProfile`) |
-     | `KeyPairNameTest` / `KeyPairNameProd` | Optional, independent per instance — leave either blank to disable SSH access for that instance. Use different key pairs for test and prod if you want separate SSH credentials per environment |
-     | `TestEC2Name` / `ProdEC2Name` | Sets the instance's `Name` tag — use a descriptive instance name (e.g. `myapp-test`, `myapp-prod`) rather than the default placeholder |
+     | `KeyPairNameTest` / `KeyPairNameProd` | Optional, independent per instance, leave either blank to disable SSH access for that instance. Use different key pairs for test and prod if you want separate SSH credentials per environment |
+     | `TestEC2Name` / `ProdEC2Name` | Sets the instance's `Name` tag, use a descriptive instance name (e.g. `myapp-test`, `myapp-prod`) rather than the default placeholder |
      | `VpcId` | VPC containing the subnets above |
      | `LoadBalancerName` | Name of the ALB |
      | `TestTargetGroupName` / `ProdTargetGroupName` | Target group names |
      | `AppPort` | Port the app listens on (default `80`) |
      | `HealthCheckPath` | Target group health check path (default `/health`) |
      | `AllowedHttpCidr` | CIDR allowed to reach the ALB (default `0.0.0.0/0`) |
-     | `CertificateArn` | Optional — leave blank to deploy HTTP-only. See **HTTPS/ACM** note below |
+     | `CertificateArn` | Optional, leave blank to deploy HTTP-only. See **HTTPS/ACM** note below |
      | `DataVolumeTypeTest` / `DataVolumeSizeTest` | EBS volume type (default `gp3`) and size in GiB (default `20`) for the additional data volume attached to the test instance |
      | `DataVolumeTypeProd` / `DataVolumeSizeProd` | EBS volume type (default `gp3`) and size in GiB (default `20`) for the additional data volume attached to the prod instance |
    - Click **Next**.
@@ -71,7 +71,7 @@ volume rather than the instance's root volume. If you change
 ## HTTPS / ACM note
 
 If you don't yet have an approved ACM certificate, deploy the stack with
-`CertificateArn` left blank — the ALB will be created with an HTTP-only
+`CertificateArn` left blank, the ALB will be created with an HTTP-only
 listener on port 80. Once your ACM certificate request is validated and
 shows status **Issued** in the ACM console, come back and **update** the
 stack with the certificate's ARN in `CertificateArn`; this adds the HTTPS
@@ -94,10 +94,10 @@ listener on port 443 without needing to recreate the stack.
    exists on the correct listener (HTTPS listener if a certificate was
    supplied, otherwise HTTP).
 
-## Load-test the prod and test sites via the ALB DNS name
+## Testing the prod and test sites via the ALB DNS name
 
 Using the `LoadBalancerDNSName` output value (e.g.
-`App-ALB-123456789.us-east-1.elb.amazonaws.com`):
+`App-ALB-123456789.ca-central-1.elb.amazonaws.com`):
 
 - **Prod site**: open `http://<LoadBalancerDNSName>/` (or `https://` if a
   certificate is configured) in a browser, or run:
@@ -124,7 +124,7 @@ Using the `LoadBalancerDNSName` output value (e.g.
   adjust parameters → **Next** → **Submit**.
 - **Delete**: select the stack → **Delete** → confirm. **This deletes the
   Application Load Balancer, both target groups, both EC2 instances, and
-  both security groups** — there is no way to recover them once the stack
+  both security groups**, there is **NO WAY** to **RECOVER** them once the stack
   deletion completes.
 
 
