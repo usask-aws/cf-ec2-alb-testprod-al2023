@@ -1,4 +1,4 @@
-# Usask_EC2_Loadbalancer_Test_Prod_cloudformation_template.yaml
+# cf-ec2-alb-testprod-al2023.yaml
 
 Creates a test and prod EC2 instance pair behind a single Application Load
 Balancer(ALB). The default (port 80, and port 443 if a certificate is provided)
@@ -15,17 +15,38 @@ actual application before uploading the template, otherwise the instances
 will only ever serve the sample "Test Works" / "Prod Works" pages.
 
 Each instance also gets an additional EBS data volume (sized via
-`DataVolumeSizeTest`/`DataVolumeSizeProd`) that the same `UserData` script
-formats (XFS) and mounts at `/data` automatically on first boot, persisting
-the mount across reboots via `/etc/fstab`. If your application needs a
-different mount point, update the `MOUNT_POINT` value in the `UserData`
-block accordingly.
+`DataVolumeSizeTest`/`DataVolumeSizeProd`), created and attached as
+**standalone `AWS::EC2::Volume` / `AWS::EC2::VolumeAttachment` resources**
+(`TestDataVolume`/`ProdDataVolume` and their `*Attachment` resources) rather
+than an inline instance block device. This is deliberate: the volume's
+lifecycle is fully decoupled from the instance's, and both volumes have
+`DeletionPolicy: Retain`. That means:
+
+- If the instance is replaced (e.g. a stack update changes `AmiIdTest` /
+  `InstanceTypeTest` and forces a new instance), CloudFormation re-attaches
+  the **same** data volume to the new instance — no data loss.
+- If the whole stack is **deleted**, the two data volumes are **not**
+  deleted along with it — they're left behind (in `available` state once
+  detached) so app content and logs survive even full stack teardown. See
+  **Updating or deleting the stack** below for cleanup.
+
+Because the volume is attached as a separate step (not guaranteed present
+the instant the instance boots), the `UserData` script polls for the device
+(up to ~2.5 minutes) before formatting/mounting it. Once found, it's
+formatted (XFS, first boot only) and mounted at `/data`, persisting across
+reboots via `/etc/fstab`. If your application needs a different mount
+point, update the `MOUNT_POINT` value in the `UserData` block accordingly.
 
 `httpd`'s `DocumentRoot` is repointed from `/var/www/html` to
-`$MOUNT_POINT/www/html` (i.e. `/data/www/html` by default) before the
-service first starts, so all site content lives on the mounted EBS data
-volume rather than the instance's root volume. If you change
+`$MOUNT_POINT/www/html` (i.e. `/data/www/html` by default) before `httpd`
+first starts, so all site content lives on the persistent EBS data volume
+rather than the instance's (ephemeral, root) volume. If you change
 `MOUNT_POINT`, the document root moves with it automatically.
+
+`httpd`'s access/error logs are intentionally left at the default
+`/var/log/httpd/` path on the root volume (not moved to the data volume) —
+log rotation (`logrotate`) can be layered on separately later if/when logs
+need to be shipped or retained beyond an instance's lifetime.
 
 ## Deploy from the AWS Console
 
@@ -81,7 +102,8 @@ listener on port 443 without needing to recreate the stack.
 
 1. **CloudFormation** → open the stack → **Outputs** tab → note
    `LoadBalancerDNSName`, `TestEC2InstanceId`, `ProdEC2InstanceId`,
-   `TestTargetGroupArn`, `ProdTargetGroupArn`.
+   `TestTargetGroupArn`, `ProdTargetGroupArn`, `TestDataVolumeId`,
+   `ProdDataVolumeId`.
 2. **EC2 → Instances** → confirm `TestEC2InstanceId` and `ProdEC2InstanceId`
    both show **Status check: 2/2 checks passed**.
 3. **EC2 → Target Groups** → open the test and prod target groups → check
@@ -125,11 +147,17 @@ Using the `LoadBalancerDNSName` output value (e.g.
 - **Delete**: select the stack → **Delete** → confirm. **This deletes the
   Application Load Balancer, both target groups, both EC2 instances, and
   both security groups**, there is **NO WAY** to **RECOVER** them once the stack
-  deletion completes.
+  deletion completes. **The two data volumes (`TestDataVolume` /
+  `ProdDataVolume`) are intentionally NOT deleted** (`DeletionPolicy:
+  Retain`) — they'll remain in the account in `available` state, still
+  billing, holding your app content and logs. If you're tearing the
+  environment down for good, manually delete them afterwards via
+  **EC2 → Volumes** once you've confirmed you no longer need the data (or
+  snapshot them first if you might).
 
 
 
-# Usask_WAF_cloudformation_template.yaml
+# cf-ec2-alb-testprod-al2023-waf.yaml
 
 Creates a regional AWS WAF Web ACL (with AWS-managed rule groups) and
 associates it with an existing Application Load Balancer.
