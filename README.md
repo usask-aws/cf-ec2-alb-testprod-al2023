@@ -44,7 +44,7 @@ rather than the instance's (ephemeral, root) volume. If you change
 `MOUNT_POINT`, the document root moves with it automatically.
 
 `httpd`'s access/error logs are intentionally left at the default
-`/var/log/httpd/` path on the root volume (not moved to the data volume) —
+`/var/log/httpd/` path on the root volume (not moved to the data volume),
 log rotation (`logrotate`) can be layered on separately later if/when logs
 need to be shipped or retained beyond an instance's lifetime.
 
@@ -117,12 +117,28 @@ listener on port 443 without needing to recreate the stack.
    `ProdDataVolumeId`.
 2. **EC2 → Instances** → confirm `TestEC2InstanceId` and `ProdEC2InstanceId`
    both show **Status check: 2/2 checks passed**.
-3. **EC2 → Target Groups** → open the test and prod target groups → check
+3. Connect to each instance via **SSM Session Manager** (no SSH/bastion
+   needed — the environment's SSM VPC endpoints are already deployed, and
+   the instances have no public IP by design):
+   - **EC2 → Instances** → select `TestEC2InstanceId` (or
+     `ProdEC2InstanceId`) → **Connect** → **Session Manager** tab →
+     **Connect**. This requires `InstanceProfileName` to include the
+     `AmazonSSMManagedInstanceCore` policy (or equivalent).
+   - Once connected, verify the mount and app locally:
+     ```bash
+     df -h /data
+     systemctl status httpd
+     curl -i http://localhost/health
+     ```
+     Confirm `/data` is mounted (from the `TestDataVolume`/`ProdDataVolume`
+     EBS volume), `httpd` is `active (running)`, and the health check
+     returns `200 OK`.
+4. **EC2 → Target Groups** → open the test and prod target groups → check
    the **Targets** tab → confirm each registered instance shows
    **Health status: healthy**. If a target is `unhealthy`, verify the
    instance's UserData actually started the app and serves the
    `HealthCheckPath`.
-4. **EC2 → Load Balancers** → open the ALB → confirm **State: Active**, and
+5. **EC2 → Load Balancers** → open the ALB → confirm **State: Active**, and
    check the **Listeners and rules** tab to confirm the `/test/*` rule
    exists on the correct listener (HTTPS listener if a certificate was
    supplied, otherwise HTTP).
@@ -160,7 +176,7 @@ Using the `LoadBalancerDNSName` output value (e.g.
   both security groups**, there is **NO WAY** to **RECOVER** them once the stack
   deletion completes. **The two data volumes (`TestDataVolume` /
   `ProdDataVolume`) are intentionally NOT deleted** (`DeletionPolicy:
-  Retain`) — they'll remain in the account in `available` state, still
+  Retain`), they'll remain in the account in `available` state, still
   billing, holding your app content and logs. If you're tearing the
   environment down for good, manually delete them afterwards via
   **EC2 → Volumes** once you've confirmed you no longer need the data (or
