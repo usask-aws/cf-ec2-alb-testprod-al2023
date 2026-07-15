@@ -22,11 +22,11 @@ Parameters:
     Default: t2.micro
     Description: 'Instance type for prod environment'
 
-  TestSubnetId:
+  SubnetIdTest:
     Type: AWS::EC2::Subnet::Id
     Description: 'Subnet ID for test environment (MUST BE PRIVATE)'
 
-  ProdSubnetId:
+  SubnetIdProd:
     Type: AWS::EC2::Subnet::Id
     Description: 'Subnet ID for prod environment (MUST BE PRIVATE)'
 
@@ -49,11 +49,11 @@ Parameters:
     Default: ""
     Description: 'Optional: Select an existing EC2 Key Pair to enable SSH access to the prod instance'
 
-  TestEC2Name:
+  EC2NameTest:
     Type: String
     Default: Test-EC2-Instance
 
-  ProdEC2Name:
+  EC2NameProd:
     Type: String
     Default: Prod-EC2-Instance
 
@@ -64,11 +64,11 @@ Parameters:
     Type: String
     Default: App-ALB
 
-  TestTargetGroupName:
+  TargetGroupNameTest:
     Type: String
     Default: Test-App-TG
 
-  ProdTargetGroupName:
+  TargetGroupNameProd:
     Type: String
     Default: Prod-App-TG
 
@@ -200,7 +200,7 @@ Resources:
         HttpEndpoint: enabled
       NetworkInterfaces:
         - DeviceIndex: "0"
-          SubnetId: !Ref TestSubnetId
+          SubnetId: !Ref SubnetIdTest
           AssociatePublicIpAddress: false
           GroupSet:
             - !Ref EC2SecurityGroup
@@ -238,7 +238,7 @@ Resources:
 
       Tags:
         - Key: Name
-          Value: !Ref TestEC2Name
+          Value: !Ref EC2NameTest
         - Key: Environment
           Value: test
 
@@ -252,7 +252,7 @@ Resources:
       Encrypted: true
       Tags:
         - Key: Name
-          Value: !Sub '${TestEC2Name}-data'
+          Value: !Sub '${EC2NameTest}-data'
 
   TestDataVolumeAttachment:
     Type: AWS::EC2::VolumeAttachment
@@ -278,7 +278,7 @@ Resources:
         HttpEndpoint: enabled
       NetworkInterfaces:
         - DeviceIndex: "0"
-          SubnetId: !Ref ProdSubnetId
+          SubnetId: !Ref SubnetIdProd
           AssociatePublicIpAddress: false
           GroupSet:
             - !Ref EC2SecurityGroup
@@ -313,7 +313,7 @@ Resources:
           systemctl start httpd
       Tags:
         - Key: Name
-          Value: !Ref ProdEC2Name
+          Value: !Ref EC2NameProd
         - Key: Environment
           Value: prod
 
@@ -327,7 +327,7 @@ Resources:
       Encrypted: true
       Tags:
         - Key: Name
-          Value: !Sub '${ProdEC2Name}-data'
+          Value: !Sub '${EC2NameProd}-data'
 
   ProdDataVolumeAttachment:
     Type: AWS::EC2::VolumeAttachment
@@ -350,7 +350,7 @@ Resources:
   TestTargetGroup:
     Type: AWS::ElasticLoadBalancingV2::TargetGroup
     Properties:
-      Name: !Ref TestTargetGroupName
+      Name: !Ref TargetGroupNameTest
       VpcId: !Ref VpcId
       Protocol: HTTP
       Port: !Ref AppPort
@@ -367,7 +367,7 @@ Resources:
   ProdTargetGroup:
     Type: AWS::ElasticLoadBalancingV2::TargetGroup
     Properties:
-      Name: !Ref ProdTargetGroupName
+      Name: !Ref TargetGroupNameProd
       VpcId: !Ref VpcId
       Protocol: HTTP
       Port: !Ref AppPort
