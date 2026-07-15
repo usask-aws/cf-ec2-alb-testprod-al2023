@@ -24,9 +24,9 @@ lifecycle is fully decoupled from the instance's, and both volumes have
 
 - If the instance is replaced (e.g. a stack update changes `AmiIdTest` /
   `InstanceTypeTest` and forces a new instance), CloudFormation re-attaches
-  the **same** data volume to the new instance — no data loss.
+  the **same** data volume to the new instance, no data loss.
 - If the whole stack is **deleted**, the two data volumes are **not**
-  deleted along with it — they're left behind (in `available` state once
+  deleted along with it, they're left behind (in `available` state once
   detached) so app content and logs survive even full stack teardown. See
   **Updating or deleting the stack** below for cleanup.
 
@@ -202,10 +202,10 @@ internal/private-only load balancers may go without it.
      |---|---|
      | `WebACLName` | Name of the Web ACL (default `Standalone-App-WAF`) |
      | `LoadBalancerArn` | ARN of the existing ALB (from Prerequisites above) |
-     | `EnableCommonRuleSet` | AWS Managed Common Rule Set — leave `true` unless you have a specific reason to disable it |
-     | `EnableKnownBadInputsRuleSet` | AWS Managed Known Bad Inputs Rule Set — leave `true` |
-     | `EnableAmazonIpReputationList` | AWS Managed Amazon IP Reputation List — leave `true` |
-     | `EnableCloudWatchMetrics` | Emits per-rule CloudWatch metrics — leave `true` for visibility |
+     | `EnableCommonRuleSet` | AWS Managed Common Rule Set: leave `true` unless you have a specific reason to disable it |
+     | `EnableKnownBadInputsRuleSet` | AWS Managed Known Bad Inputs Rule Set: leave `true` |
+     | `EnableAmazonIpReputationList` | AWS Managed Amazon IP Reputation List: leave `true` |
+     | `EnableCloudWatchMetrics` | Emits per-rule CloudWatch metrics: leave `true` for visibility |
      | `EnableSampledRequests` | Stores a rolling sample of matched requests for troubleshooting — leave `true` |
    - Click **Next**.
 7. On **Configure stack options**, leave defaults (add tags/permissions
