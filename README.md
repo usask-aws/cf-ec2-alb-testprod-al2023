@@ -63,25 +63,36 @@ need to be shipped or retained beyond an instance's lifetime.
 6. On **Specify stack details**:
    - Enter a **Stack name** (e.g. `ec2-alb-test-prod-stack`).
    - Fill in the parameters:
+     Parameters are listed here in alphabetical order, matching how the
+     CloudFormation console prompts for them (it lists parameters
+     alphabetically by name when no parameter groups are defined):
+
      | Parameter | Notes |
      |---|---|
-     | `AmiIdTest` / `AmiIdProd` | Leave default to use the latest Amazon Linux 2023 AMI via SSM, or override |
-     | `InstanceTypeTest` / `InstanceTypeProd` | Default `t2.micro` |
-     | `TestSubnetId` | Subnet for the test instance (MUST BE **PRIVATE**) |
-     | `ProdSubnetId` | Subnet for the prod instance (MUST BE **PRIVATE**) |
-     | `LoadBalancerSubnetIds` | Must select exactly **two** subnets, in different AZs, and both must be **PUBLIC** subnets
-     | `InstanceProfileName` | Name of an existing IAM instance profile (defaults to `DefaultEC2InstanceProfile`) |
-     | `KeyPairNameTest` / `KeyPairNameProd` | Optional, independent per instance, leave either blank to disable SSH access for that instance. Use different key pairs for test and prod if you want separate SSH credentials per environment |
-     | `TestEC2Name` / `ProdEC2Name` | Sets the instance's `Name` tag, use a descriptive instance name (e.g. `myapp-test`, `myapp-prod`) rather than the default placeholder |
-     | `VpcId` | VPC containing the subnets above |
-     | `LoadBalancerName` | Name of the ALB |
-     | `TestTargetGroupName` / `ProdTargetGroupName` | Target group names |
-     | `AppPort` | Port the app listens on (default `80`) |
-     | `HealthCheckPath` | Target group health check path (default `/health`) |
      | `AllowedHttpCidr` | CIDR allowed to reach the ALB (default `0.0.0.0/0`) |
+     | `AmiIdProd` | Leave default to use the latest Amazon Linux 2023 AMI via SSM, or override (prod instance) |
+     | `AmiIdTest` | Leave default to use the latest Amazon Linux 2023 AMI via SSM, or override (test instance) |
+     | `AppPort` | Port the app listens on (default `80`) |
      | `CertificateArn` | Optional, leave blank to deploy HTTP-only. See **HTTPS/ACM** note below |
-     | `DataVolumeTypeTest` / `DataVolumeSizeTest` | EBS volume type (default `gp3`) and size in GiB (default `20`) for the additional data volume attached to the test instance |
-     | `DataVolumeTypeProd` / `DataVolumeSizeProd` | EBS volume type (default `gp3`) and size in GiB (default `20`) for the additional data volume attached to the prod instance |
+     | `DataVolumeSizeProd` | Size in GiB (default `20`) for the additional data volume attached to the prod instance |
+     | `DataVolumeSizeTest` | Size in GiB (default `20`) for the additional data volume attached to the test instance |
+     | `DataVolumeTypeProd` | EBS volume type (default `gp3`) for the additional data volume attached to the prod instance |
+     | `DataVolumeTypeTest` | EBS volume type (default `gp3`) for the additional data volume attached to the test instance |
+     | `EC2NameProd` | Sets the prod instance's `Name` tag, use a descriptive name (e.g. `myapp-prod`) rather than the default placeholder |
+     | `EC2NameTest` | Sets the test instance's `Name` tag, use a descriptive name (e.g. `myapp-test`) rather than the default placeholder |
+     | `HealthCheckPath` | Target group health check path (default `/health`) |
+     | `InstanceProfileName` | Name of an existing IAM instance profile (defaults to `DefaultEC2InstanceProfile`) |
+     | `InstanceTypeProd` | Instance type for the prod instance (default `t2.micro`) |
+     | `InstanceTypeTest` | Instance type for the test instance (default `t2.micro`) |
+     | `KeyPairNameProd` | Optional, leave blank to disable SSH access to the prod instance |
+     | `KeyPairNameTest` | Optional, leave blank to disable SSH access to the test instance. Use a different key pair than `KeyPairNameProd` if you want separate SSH credentials per environment |
+     | `LoadBalancerName` | Name of the ALB |
+     | `LoadBalancerSubnetIds` | Must select exactly **two** subnets, in different AZs, and both must be **PUBLIC** subnets |
+     | `SubnetIdProd` | Subnet for the prod instance (MUST BE **PRIVATE**) |
+     | `SubnetIdTest` | Subnet for the test instance (MUST BE **PRIVATE**) |
+     | `TargetGroupNameProd` | Prod target group name |
+     | `TargetGroupNameTest` | Test target group name |
+     | `VpcId` | VPC containing the subnets above |
    - Click **Next**.
 7. On **Configure stack options**, leave defaults (add tags/permissions
    boundary only if your account requires them) and click **Next**.
@@ -154,6 +165,7 @@ Using the `LoadBalancerDNSName` output value (e.g.
   environment down for good, manually delete them afterwards via
   **EC2 → Volumes** once you've confirmed you no longer need the data (or
   snapshot them first if you might).
+
 
 
 
