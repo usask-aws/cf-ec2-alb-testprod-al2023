@@ -128,20 +128,21 @@ Using the `LoadBalancerDNSName` output value (e.g.
   deletion completes.
 
 
+
 # Usask_WAF_cloudformation_template.yaml
 
 Creates a regional AWS WAF Web ACL (with AWS-managed rule groups) and
 associates it with an existing Application Load Balancer.
 
-## (Optional) stack — but mandatory for public web services
+## Optional stack : Mandatory for public web services
 
 This template is deployed as a **separate, standalone stack** from the ALB
-itself — CloudFormation does not require it, and the ALB will function
-without it. However, per team policy, **attaching this WAF Web ACL is
+itself, CloudFormation does not require it, and the ALB will function
+without it. However, as per secuirty policy, **attaching this WAF Web ACL is
 mandatory for any internet-facing web service** (any ALB with
 `Scheme: internet-facing`, such as the one created by
 `Usask_EC2_Loadbalancer_Test_Prod_cloudformation_template.yaml`). Do not
-skip this step for a production or public-facing deployment — only
+skip this step for a production or public-facing deployment, only
 internal/private-only load balancers may go without it.
 
 ## Prerequisites
@@ -149,15 +150,14 @@ internal/private-only load balancers may go without it.
 - An existing **regional** Application Load Balancer already deployed (e.g.
   via `Usask_EC2_Loadbalancer_cloudformation_template.yaml` or
   `Usask_EC2_Loadbalancer_Test_Prod_cloudformation_template.yaml`) and its
-  ARN. The current Load Balancer templates don't expose the ALB ARN as a
-  stack Output — get it from the console instead:
+  ARN. Get the load balancer ARN from the console.
   **EC2 → Load Balancers → select the ALB → Description tab → ARN** (or copy
   it from the **Load Balancer ARN** field).
 
 ## Deploy from the AWS Console
 
 1. Sign in to the AWS Console for the target account and switch to the
-   correct region (top-right region selector) — WAF must be created in the
+   correct region (top-right region selector), WAF must be created in the
    **same region** as the ALB (this template uses `Scope: REGIONAL`, not
    `CLOUDFRONT`).
 2. Go to the **CloudFormation** service.
@@ -168,7 +168,7 @@ internal/private-only load balancers may go without it.
    **Choose file**, and select `Usask_WAF_cloudformation_template.yaml`.
    Click **Next**.
 6. On **Specify stack details**:
-   - Enter a **Stack name** (e.g. `usask-waf-app-alb`).
+   - Enter a **Stack name** (e.g. `waf-app-alb-stack`).
    - Fill in the parameters:
      | Parameter | Notes |
      |---|---|
@@ -209,6 +209,6 @@ internal/private-only load balancers may go without it.
   adjust parameters → **Next** → **Submit**.
 - **Delete**: select the stack → **Delete** → confirm. **This removes the
   Web ACL and its association with the ALB**, leaving the ALB
-  unprotected — if the ALB is internet-facing, redeploy WAF (or point it at
+  unprotected, if the ALB is internet-facing, redeploy WAF (or point it at
   a replacement Web ACL) before leaving it in that state for any length of
   time.
