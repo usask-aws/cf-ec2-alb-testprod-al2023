@@ -230,17 +230,56 @@ internal/private-only load balancers may go without it.
      |---|---|
      | `WebACLName` | Name of the Web ACL (default `Standalone-App-WAF`) |
      | `LoadBalancerArn` | ARN of the existing ALB (from Prerequisites above) |
-     | `EnableCommonRuleSet` | AWS Managed Common Rule Set: leave `true` unless you have a specific reason to disable it |
-     | `EnableKnownBadInputsRuleSet` | AWS Managed Known Bad Inputs Rule Set: leave `true` |
-     | `EnableAmazonIpReputationList` | AWS Managed Amazon IP Reputation List: leave `true` |
-     | `EnableCloudWatchMetrics` | Emits per-rule CloudWatch metrics: leave `true` for visibility |
+     | `EnableCommonRuleSet` | AWS Managed Common Rule Set — leave `true` unless you have a specific reason to disable it |
+     | `EnableKnownBadInputsRuleSet` | AWS Managed Known Bad Inputs Rule Set — leave `true` |
+     | `EnableAmazonIpReputationList` | AWS Managed Amazon IP Reputation List — leave `true` |
+     | `EnableCloudWatchMetrics` | Emits per-rule CloudWatch metrics — leave `true` for visibility |
      | `EnableSampledRequests` | Stores a rolling sample of matched requests for troubleshooting — leave `true` |
+   - Leave the following at their default (`false`) unless a specific
+     managed sub-rule is blocking legitimate application traffic (see
+     [Sub-rule Count-mode overrides](#sub-rule-count-mode-overrides-optional)
+     below before enabling any of these):
+     | Parameter | Sub-rule affected | Notes |
+     |---|---|---|
+     | `CountModeSizeRestrictionsBody` | `SizeRestrictions_BODY` (CommonRuleSet) | Set `true` if legitimately large request bodies (uploads, forms) are being blocked |
+     | `CountModeSizeRestrictionsQueryString` | `SizeRestrictions_QUERYSTRING` (CommonRuleSet) | Set `true` if legitimately long query strings are being blocked |
+     | `CountModeNoUserAgentHeader` | `NoUserAgent_HEADER` (CommonRuleSet) | Set `true` if internal health checks / service-to-service calls without a `User-Agent` header are being blocked |
+     | `CountModeCrossSiteScriptingBody` | `CrossSiteScripting_BODY` (CommonRuleSet) | Set `true` if an app that legitimately accepts HTML/script-like body content (e.g. a CMS or rich-text field) is being blocked |
+     | `CountModeCrossSiteScriptingQueryArguments` | `CrossSiteScripting_QUERYARGUMENTS` (CommonRuleSet) | Same as above, via query parameters |
+     | `CountModeHostLocalhostHeader` | `Host_localhost_HEADER` (KnownBadInputsRuleSet) | Set `true` if internal traffic or health checks using a `localhost`/loopback `Host` header are being blocked |
+     | `CountModePropfindMethod` | `PROPFIND_METHOD` (KnownBadInputsRuleSet) | Set `true` for WebDAV-based applications that legitimately use the `PROPFIND` HTTP method |
    - Click **Next**.
 7. On **Configure stack options**, leave defaults (add tags/permissions
    boundary only if your account requires them) and click **Next**.
 8. On **Review**, scroll down and confirm the stack details, then click
    **Submit**.
 9. Wait for the stack **Status** to reach `CREATE_COMPLETE`.
+
+## Sub-rule Count-mode overrides (optional)
+
+Each `EnableCommonRuleSet`/`EnableKnownBadInputsRuleSet` toggle enables or
+disables an entire AWS managed rule group at once. The 7 `CountMode*`
+parameters above are more targeted: they switch **one specific sub-rule**
+inside `CommonRuleSet` or `KnownBadInputsRuleSet` from `Block` to `Count`
+(the request is logged and allowed through, not blocked), while every other
+sub-rule in that group keeps blocking as normal. This lets you work around a
+false positive against your application's own traffic without disabling an
+entire rule group's protection.
+
+Only 7 sub-rules — the ones most likely to false-positive against normal
+application traffic — are exposed this way; every other sub-rule in these
+managed groups (and all of `AmazonIpReputationList`) is not tunable from
+this template. If you need to Count a sub-rule not listed above, edit the
+template directly to add a matching parameter, condition, and
+`RuleActionOverrides` entry following the same pattern.
+
+All 7 parameters default to `"false"` (normal `Block` behavior) — leaving
+every one at its default produces the exact same rendered template as
+before these parameters existed. Before setting one to `"true"`, confirm
+via the Web ACL's **Sampled requests** tab (see
+[Verify the deployment in the console](#verify-the-deployment-in-the-console)
+below) that the sub-rule in question is actually the one blocking your
+traffic.
 
 ## Verify the deployment in the console
 
@@ -268,3 +307,4 @@ internal/private-only load balancers may go without it.
   unprotected, if the ALB is internet-facing, redeploy WAF (or point it at
   a replacement Web ACL) before leaving it in that state for any length of
   time.
+
