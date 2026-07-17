@@ -45,12 +45,68 @@ Parameters:
       - "true"
       - "false"
 
+  CountModeSizeRestrictionsBody:
+    Type: String
+    Default: "false"
+    AllowedValues:
+      - "true"
+      - "false"
+
+  CountModeSizeRestrictionsQueryString:
+    Type: String
+    Default: "false"
+    AllowedValues:
+      - "true"
+      - "false"
+
+  CountModeNoUserAgentHeader:
+    Type: String
+    Default: "false"
+    AllowedValues:
+      - "true"
+      - "false"
+
+  CountModeCrossSiteScriptingBody:
+    Type: String
+    Default: "false"
+    AllowedValues:
+      - "true"
+      - "false"
+
+  CountModeCrossSiteScriptingQueryArguments:
+    Type: String
+    Default: "false"
+    AllowedValues:
+      - "true"
+      - "false"
+
+  CountModeHostLocalhostHeader:
+    Type: String
+    Default: "false"
+    AllowedValues:
+      - "true"
+      - "false"
+
+  CountModePropfindMethod:
+    Type: String
+    Default: "false"
+    AllowedValues:
+      - "true"
+      - "false"
+
 Conditions:
   UseCommonRuleSet: !Equals [!Ref EnableCommonRuleSet, "true"]
   UseKnownBadInputsRuleSet: !Equals [!Ref EnableKnownBadInputsRuleSet, "true"]
   UseAmazonIpReputationList: !Equals [!Ref EnableAmazonIpReputationList, "true"]
   UseCloudWatchMetrics: !Equals [!Ref EnableCloudWatchMetrics, "true"]
   UseSampledRequests: !Equals [!Ref EnableSampledRequests, "true"]
+  IsCountModeSizeRestrictionsBody: !Equals [!Ref CountModeSizeRestrictionsBody, "true"]
+  IsCountModeSizeRestrictionsQueryString: !Equals [!Ref CountModeSizeRestrictionsQueryString, "true"]
+  IsCountModeNoUserAgentHeader: !Equals [!Ref CountModeNoUserAgentHeader, "true"]
+  IsCountModeCrossSiteScriptingBody: !Equals [!Ref CountModeCrossSiteScriptingBody, "true"]
+  IsCountModeCrossSiteScriptingQueryArguments: !Equals [!Ref CountModeCrossSiteScriptingQueryArguments, "true"]
+  IsCountModeHostLocalhostHeader: !Equals [!Ref CountModeHostLocalhostHeader, "true"]
+  IsCountModePropfindMethod: !Equals [!Ref CountModePropfindMethod, "true"]
 
 Resources:
   WebACL:
@@ -75,6 +131,37 @@ Resources:
               ManagedRuleGroupStatement:
                 VendorName: AWS
                 Name: AWSManagedRulesCommonRuleSet
+                RuleActionOverrides:
+                  - !If
+                    - IsCountModeSizeRestrictionsBody
+                    - Name: SizeRestrictions_BODY
+                      ActionToUse:
+                        Count: {}
+                    - !Ref AWS::NoValue
+                  - !If
+                    - IsCountModeSizeRestrictionsQueryString
+                    - Name: SizeRestrictions_QUERYSTRING
+                      ActionToUse:
+                        Count: {}
+                    - !Ref AWS::NoValue
+                  - !If
+                    - IsCountModeNoUserAgentHeader
+                    - Name: NoUserAgent_HEADER
+                      ActionToUse:
+                        Count: {}
+                    - !Ref AWS::NoValue
+                  - !If
+                    - IsCountModeCrossSiteScriptingBody
+                    - Name: CrossSiteScripting_BODY
+                      ActionToUse:
+                        Count: {}
+                    - !Ref AWS::NoValue
+                  - !If
+                    - IsCountModeCrossSiteScriptingQueryArguments
+                    - Name: CrossSiteScripting_QUERYARGUMENTS
+                      ActionToUse:
+                        Count: {}
+                    - !Ref AWS::NoValue
             VisibilityConfig:
               CloudWatchMetricsEnabled: !If [UseCloudWatchMetrics, true, false]
               MetricName: CommonRuleSet
@@ -91,6 +178,19 @@ Resources:
               ManagedRuleGroupStatement:
                 VendorName: AWS
                 Name: AWSManagedRulesKnownBadInputsRuleSet
+                RuleActionOverrides:
+                  - !If
+                    - IsCountModeHostLocalhostHeader
+                    - Name: Host_localhost_HEADER
+                      ActionToUse:
+                        Count: {}
+                    - !Ref AWS::NoValue
+                  - !If
+                    - IsCountModePropfindMethod
+                    - Name: PROPFIND_METHOD
+                      ActionToUse:
+                        Count: {}
+                    - !Ref AWS::NoValue
             VisibilityConfig:
               CloudWatchMetricsEnabled: !If [UseCloudWatchMetrics, true, false]
               MetricName: KnownBadInputs
