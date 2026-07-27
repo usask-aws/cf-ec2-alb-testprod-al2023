@@ -77,7 +77,7 @@ separately if you need retention beyond what's on the data volume.
    template**.
 5. Under **Specify template**, select **Upload a template file**, click
    **Choose file**, and select your edited
-   `Usask_EC2_Loadbalancer_Test_Prod_Web_cloudformation_template.yaml`. Click
+   `cf-ec2-alb-testprod-al2023.yaml`. Click
    **Next**.
 6. On **Specify stack details**:
    - Enter a **Stack name** (e.g. `ec2-alb-test-prod-stack`).
@@ -142,7 +142,7 @@ investigate suspicious traffic or reconstruct what a specific client did.
 To enable it after this stack is deployed:
 
 1. Have (or create) an S3 bucket to receive the logs — e.g. via
-   `Usask_S3_cloudformation_template.yaml`, or a dedicated logs bucket.
+   `cf-s3-artifact-bucket.yaml`, or a dedicated logs bucket.
 2. Add a bucket policy statement allowing the Elastic Load Balancing service
    to write to it. For most regions (the current, service-principal-based
    method):
@@ -160,7 +160,7 @@ To enable it after this stack is deployed:
    Application Load Balancer access logs for the account ID that applies to
    your region before assuming the statement above is sufficient.
    If you're adding this to the bucket created by
-   `Usask_S3_cloudformation_template.yaml`, add the statement to that
+   `cf-s3-artifact-bucket.yaml`, add the statement to that
    template's `S3BucketPolicy` resource (a bucket can only have one bucket
    policy document, so this can't be a second, separate `AWS::S3::BucketPolicy`
    resource pointed at the same bucket from this LB stack).
@@ -245,7 +245,6 @@ Using the `LoadBalancerDNSName` output value (e.g.
 
 
 
-
 # cf-ec2-alb-testprod-al2023-waf.yaml
 
 Creates a regional AWS WAF Web ACL (with AWS-managed rule groups) and
@@ -258,15 +257,15 @@ itself, CloudFormation does not require it, and the ALB will function
 without it. However, as per secuirty policy, **attaching this WAF Web ACL is
 mandatory for any internet-facing web service** (any ALB with
 `Scheme: internet-facing`, such as the one created by
-`Usask_EC2_Loadbalancer_Test_Prod_cloudformation_template.yaml`). Do not
+`cf-ec2-alb-testprod-al2023.yaml`). Do not
 skip this step for a production or public-facing deployment, only
 internal/private-only load balancers may go without it.
 
 ## Prerequisites
 
 - An existing **regional** Application Load Balancer already deployed (e.g.
-  via `Usask_EC2_Loadbalancer_cloudformation_template.yaml` or
-  `Usask_EC2_Loadbalancer_Test_Prod_cloudformation_template.yaml`) and its
+  via `cf-ec2-alb-single-al2023.yaml` or
+  `cf-ec2-alb-testprod-al2023.yaml`) and its
   ARN. Get the load balancer ARN from the console.
   **EC2 → Load Balancers → select the ALB → Description tab → ARN** (or copy
   it from the **Load Balancer ARN** field).
@@ -282,7 +281,7 @@ internal/private-only load balancers may go without it.
 4. Under **Prerequisite - Prepare template**, select **Choose an existing
    template**.
 5. Under **Specify template**, select **Upload a template file**, click
-   **Choose file**, and select `Usask_WAF_cloudformation_template.yaml`.
+   **Choose file**, and select `cf-ec2-alb-testprod-al2023-waf.yaml`.
    Click **Next**.
 6. On **Specify stack details**:
    - Enter a **Stack name** (e.g. `waf-app-alb-stack`).
@@ -309,6 +308,13 @@ internal/private-only load balancers may go without it.
      | `CountModeCrossSiteScriptingQueryArguments` | `CrossSiteScripting_QUERYARGUMENTS` (CommonRuleSet) | Same as above, via query parameters |
      | `CountModeHostLocalhostHeader` | `Host_localhost_HEADER` (KnownBadInputsRuleSet) | Set `true` if internal traffic or health checks using a `localhost`/loopback `Host` header are being blocked |
      | `CountModePropfindMethod` | `PROPFIND_METHOD` (KnownBadInputsRuleSet) | Set `true` for WebDAV-based applications that legitimately use the `PROPFIND` HTTP method |
+   - Optional rate limiting (see
+     [Rate-based rule (optional)](#rate-based-rule-optional) below before
+     enabling):
+     | Parameter | Notes |
+     |---|---|
+     | `EnableRateLimitRule` | Default `"false"` (disabled). Set `"true"` to block a single source IP once it exceeds `RateLimitThreshold` requests in a rolling 5-minute window |
+     | `RateLimitThreshold` | Default `2000`. Max requests per source IP per rolling 5-minute window before it's blocked; only takes effect when `EnableRateLimitRule` is `"true"` |
    - Click **Next**.
 7. On **Configure stack options**, leave defaults (add tags/permissions
    boundary only if your account requires them) and click **Next**.
@@ -341,6 +347,79 @@ via the Web ACL's **Sampled requests** tab (see
 [Verify the deployment in the console](#verify-the-deployment-in-the-console)
 below) that the sub-rule in question is actually the one blocking your
 traffic.
+
+## Rate-based rule (optional)
+
+`EnableRateLimitRule` adds a `RateBasedStatement` rule that counts requests
+per **source IP** over a rolling **5-minute window**. Once an IP crosses
+`RateLimitThreshold` requests within that window, only *that IP* is
+blocked — everyone else is unaffected — and it stays blocked only as long as
+its rate over the window remains above the threshold; it's re-evaluated
+continuously, not a fixed timeout.
+
+This is disabled by default (`EnableRateLimitRule: "false"`) because a rate
+limit is more likely than the managed rule groups above to false-positive
+against legitimate traffic that shares a single IP — a NAT gateway, a
+corporate proxy, or carrier-grade NAT on mobile networks can put many real
+users behind one address. The default threshold, `2000` requests per IP per
+5 minutes, is AWS's general-purpose starting point: generous enough to
+avoid throttling normal traffic, low enough to catch a real flood
+(scraping, credential stuffing, or a crude request flood). Tune
+`RateLimitThreshold` for your application's actual traffic pattern rather
+than assuming the default fits.
+
+Since this WAF is a **regional** Web ACL attached directly to the ALB (no
+CloudFront or other proxy in front, per this template's design), the rule
+uses `AggregateKeyType: IP`, i.e. the real client IP WAF sees. If you later
+put a CDN or another reverse proxy in front of this ALB, plain IP
+aggregation would count the proxy's IP instead of the original client's —
+that scenario needs `AggregateKeyType: FORWARDED_IP` against a trusted
+header instead, which this template does not currently support.
+
+Before enabling this in `Block` mode against production traffic, consider
+watching the `RateLimit` rule's **Sampled requests** (see
+[Verify the deployment in the console](#verify-the-deployment-in-the-console)
+below) for a while at a threshold you expect to never trip, to confirm your
+assumptions about normal traffic volume per IP before it can actually block
+anyone.
+
+## Best practice (optional, not enforced by this template): full WAF logging
+
+This template enables CloudWatch metrics and sampled requests
+(`EnableCloudWatchMetrics`/`EnableSampledRequests`, both default `true`),
+but does not create an `AWS::WAFv2::LoggingConfiguration`. These are two
+different things, and sampled requests alone are not a substitute for full
+logging:
+
+- **Sampled requests** (what this template gives you by default) is a
+  rolling, partial sample — WAF keeps up to ~100 requests matched over the
+  **last 3 hours** (viewable in the Web ACL's **Sampled requests** tab, or
+  via the `GetSampledRequests` API), enough to spot-check which rule is
+  firing on your traffic (e.g. while tuning the `CountMode*` parameters
+  above), but not a complete record.
+- **Full logging** (`AWS::WAFv2::LoggingConfiguration`, not created by this
+  template) captures **every** request the Web ACL evaluates, delivered
+  continuously to a destination you choose, for as long as you retain it
+  there. This is what you'd actually want for incident investigation,
+  after-the-fact forensics, or feeding a SIEM — not just spot-checks.
+
+Full logging has an ongoing cost (S3 storage, Kinesis Data Firehose, or
+CloudWatch Logs ingestion — scaling with request volume), which is why it's
+left as an opt-in choice rather than something this template enables by
+default.
+
+To configure it after this stack is deployed:
+
+1. Pick a destination — an S3 bucket, a Kinesis Data Firehose delivery
+   stream, or a CloudWatch Logs log group. Whichever you choose, its name
+   **must** start with `aws-waf-logs-` (e.g. `aws-waf-logs-myapp`) — AWS WAF
+   requires this exact prefix and will reject any other destination name.
+2. **WAF & Shield** console → **Web ACLs** → select the Web ACL you created
+   → **Logging and metrics** tab → **Enable logging** → select your
+   destination → optionally add redaction for sensitive fields (e.g.
+   `Authorization` headers) → **Save**.
+3. Send a few requests through the ALB and confirm log records start
+   appearing at the destination within a few minutes.
 
 ## Verify the deployment in the console
 
