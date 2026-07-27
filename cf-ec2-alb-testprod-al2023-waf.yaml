@@ -94,6 +94,20 @@ Parameters:
       - "true"
       - "false"
 
+  EnableRateLimitRule:
+    Description: Add a rate-based rule that blocks a single source IP once it exceeds RateLimitThreshold requests in a rolling 5-minute window
+    Type: String
+    Default: "false"
+    AllowedValues:
+      - "true"
+      - "false"
+
+  RateLimitThreshold:
+    Description: Max requests a single source IP may send in a rolling 5-minute window before EnableRateLimitRule blocks it (only used when EnableRateLimitRule is "true")
+    Type: Number
+    Default: 2000
+    MinValue: 100
+
 Conditions:
   UseCommonRuleSet: !Equals [!Ref EnableCommonRuleSet, "true"]
   UseKnownBadInputsRuleSet: !Equals [!Ref EnableKnownBadInputsRuleSet, "true"]
@@ -107,6 +121,7 @@ Conditions:
   IsCountModeCrossSiteScriptingQueryArguments: !Equals [!Ref CountModeCrossSiteScriptingQueryArguments, "true"]
   IsCountModeHostLocalhostHeader: !Equals [!Ref CountModeHostLocalhostHeader, "true"]
   IsCountModePropfindMethod: !Equals [!Ref CountModePropfindMethod, "true"]
+  UseRateLimitRule: !Equals [!Ref EnableRateLimitRule, "true"]
 
 Resources:
   WebACL:
@@ -210,6 +225,22 @@ Resources:
             VisibilityConfig:
               CloudWatchMetricsEnabled: !If [UseCloudWatchMetrics, true, false]
               MetricName: IpReputation
+              SampledRequestsEnabled: !If [UseSampledRequests, true, false]
+          - !Ref AWS::NoValue
+
+        - !If
+          - UseRateLimitRule
+          - Name: RateLimit
+            Priority: 40
+            Action:
+              Block: {}
+            Statement:
+              RateBasedStatement:
+                Limit: !Ref RateLimitThreshold
+                AggregateKeyType: IP
+            VisibilityConfig:
+              CloudWatchMetricsEnabled: !If [UseCloudWatchMetrics, true, false]
+              MetricName: RateLimit
               SampledRequestsEnabled: !If [UseSampledRequests, true, false]
           - !Ref AWS::NoValue
 
