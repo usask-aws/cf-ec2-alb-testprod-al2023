@@ -27,26 +27,45 @@ lifecycle is fully decoupled from the instance's, and both volumes have
   the **same** data volume to the new instance, no data loss.
 - If the whole stack is **deleted**, the two data volumes are **not**
   deleted along with it, they're left behind (in `available` state once
-  detached) so app content and logs survive even full stack teardown. See
+  detached) so app content survives even full stack teardown. See
   **Updating or deleting the stack** below for cleanup.
 
 Because the volume is attached as a separate step (not guaranteed present
 the instant the instance boots), the `UserData` script polls for the device
 (up to ~2.5 minutes) before formatting/mounting it. Once found, it's
-formatted (XFS, first boot only) and mounted at `/data`, persisting across
-reboots via `/etc/fstab`. If your application needs a different mount
-point, update the `MOUNT_POINT` value in the `UserData` block accordingly.
+formatted (XFS, first boot only) and mounted directly at **`/var/www`**,
+persisting across reboots via `/etc/fstab` — deliberately the same path
+`httpd` already uses by default, rather than an out-of-the-way path like
+`/data`. If your application needs a different mount point, update the
+`MOUNT_POINT` value in the `UserData` block accordingly.
 
-`httpd`'s `DocumentRoot` is repointed from `/var/www/html` to
-`$MOUNT_POINT/www/html` (i.e. `/data/www/html` by default) before `httpd`
-first starts, so all site content lives on the persistent EBS data volume
-rather than the instance's (ephemeral, root) volume. If you change
-`MOUNT_POINT`, the document root moves with it automatically.
+Because the mount happens *before* `dnf install -y httpd` runs, the `httpd`
+package populates `/var/www/html` (and `/var/www/cgi-bin`) directly onto
+that freshly-mounted, empty volume when it installs — so `DocumentRoot`
+stays at its unmodified default (`/var/www/html`) and **`httpd.conf` is
+never edited**. All site content still ends up on the persistent EBS data
+volume, it just gets there by mounting the volume at the path `httpd`
+already expects, instead of moving `httpd`'s configuration to a different
+path. If you change `MOUNT_POINT` away from `/var/www`, you'd need to
+either repoint `DocumentRoot` yourself or accept that content will live
+under the new path's `/html` subdirectory instead of the conventional one.
 
-`httpd`'s access/error logs are intentionally left at the default
-`/var/log/httpd/` path on the root volume (not moved to the data volume),
-log rotation (`logrotate`) can be layered on separately later if/when logs
-need to be shipped or retained beyond an instance's lifetime.
+`httpd`'s access/error logs are also persisted on the data volume, using
+the same "keep the default config, relocate what it points at" approach as
+`DocumentRoot` above — but via a symlink rather than a second mount.
+`httpd.conf`'s `ErrorLog "logs/error_log"` (and the equivalent
+`CustomLog`) directive is a path relative to `ServerRoot` (`/etc/httpd`),
+resolved through `/etc/httpd/logs` — which the `httpd` package ships as a
+symlink to `/var/log/httpd` by default. The `UserData` script creates
+`$MOUNT_POINT/logs` (i.e. `/var/www/logs`) on the persistent data volume,
+then replaces that symlink so `/etc/httpd/logs` points at
+`/var/www/logs` instead. No `httpd.conf` edit, and — since `/var/www` is
+already the persistently-mounted data volume — no second mount/fstab
+entry either; a symlink is enough, because the directory it points into is
+already on persistent storage. This means logs now survive instance
+replacement and full stack deletion the same way site content does. Log
+rotation (`logrotate`) or shipping logs elsewhere can still be layered on
+separately if you need retention beyond what's on the data volume.
 
 ## Deploy from the AWS Console
 
@@ -58,7 +77,7 @@ need to be shipped or retained beyond an instance's lifetime.
    template**.
 5. Under **Specify template**, select **Upload a template file**, click
    **Choose file**, and select your edited
-   `Usask_EC2_Loadbalancer_Test_Prod_cloudformation_template.yaml`. Click
+   `Usask_EC2_Loadbalancer_Test_Prod_Web_cloudformation_template.yaml`. Click
    **Next**.
 6. On **Specify stack details**:
    - Enter a **Stack name** (e.g. `ec2-alb-test-prod-stack`).
@@ -109,6 +128,48 @@ shows status **Issued** in the ACM console, come back and **update** the
 stack with the certificate's ARN in `CertificateArn`; this adds the HTTPS
 listener on port 443 without needing to recreate the stack.
 
+## Best practice (optional, not enforced by this template): enable ALB access logging
+
+This template does not enable Application Load Balancer access logging, and
+does not require you to. Whether to turn it on is a cost/visibility
+trade-off for you to make (S3 storage + request costs for every log file,
+scaling with traffic volume) — it isn't mandatory the way the WAF
+association is for internet-facing ALBs. That said, it's worth turning on
+for any ALB serving real traffic: without it, there is no durable record of
+requests that reached the load balancer, which matters if you ever need to
+investigate suspicious traffic or reconstruct what a specific client did.
+
+To enable it after this stack is deployed:
+
+1. Have (or create) an S3 bucket to receive the logs — e.g. via
+   `Usask_S3_cloudformation_template.yaml`, or a dedicated logs bucket.
+2. Add a bucket policy statement allowing the Elastic Load Balancing service
+   to write to it. For most regions (the current, service-principal-based
+   method):
+   ```json
+   {
+     "Effect": "Allow",
+     "Principal": { "Service": "logdelivery.elasticloadbalancing.amazonaws.com" },
+     "Action": "s3:PutObject",
+     "Resource": "arn:aws:s3:::<your-logs-bucket>/*"
+   }
+   ```
+   Older regions (e.g. GovCloud, China) instead require granting a
+   region-specific ELB AWS account ID as the `Principal` rather than the
+   service principal above — check the current AWS documentation for
+   Application Load Balancer access logs for the account ID that applies to
+   your region before assuming the statement above is sufficient.
+   If you're adding this to the bucket created by
+   `Usask_S3_cloudformation_template.yaml`, add the statement to that
+   template's `S3BucketPolicy` resource (a bucket can only have one bucket
+   policy document, so this can't be a second, separate `AWS::S3::BucketPolicy`
+   resource pointed at the same bucket from this LB stack).
+3. **EC2 → Load Balancers** → select the ALB → **Attributes** tab → **Edit**
+   → enable **Monitoring** → **Access logs** → toggle on → enter the S3 URI
+   (bucket and optional prefix) → **Save changes**.
+4. Send a few requests through the ALB and confirm log files start
+   appearing under the configured S3 prefix within a few minutes.
+
 ## Verify the deployment in the console
 
 1. **CloudFormation** → open the stack → **Outputs** tab → note
@@ -126,11 +187,11 @@ listener on port 443 without needing to recreate the stack.
      `AmazonSSMManagedInstanceCore` policy (or equivalent).
    - Once connected, verify the mount and app locally:
      ```bash
-     df -h /data
+     df -h /var/www
      systemctl status httpd
      curl -i http://localhost/health
      ```
-     Confirm `/data` is mounted (from the `TestDataVolume`/`ProdDataVolume`
+     Confirm `/var/www` is mounted (from the `TestDataVolume`/`ProdDataVolume`
      EBS volume), `httpd` is `active (running)`, and the health check
      returns `200 OK`.
 4. **EC2 → Target Groups** → open the test and prod target groups → check
@@ -181,6 +242,29 @@ Using the `LoadBalancerDNSName` output value (e.g.
   environment down for good, manually delete them afterwards via
   **EC2 → Volumes** once you've confirmed you no longer need the data (or
   snapshot them first if you might).
+
+## Deploying real application code: pair this with the CodeBuild template
+
+This template only gets you a placeholder app (see **Before uploading**
+above) — it has no way to build or deploy your actual application code by
+itself. For that, deploy `Usask_CodeBuild_EC2_Deploy_cloudformation_template.yaml`
+as a **separate, follow-up stack** once these `test`/`prod` instances
+exist.
+
+That template provisions a CodeBuild project that pulls your app's source
+from GitHub, builds it (via the app repo's own `buildspec.yml`), uploads the
+build artifact to an S3 bucket, and deploys it onto these already-running
+instances via SSM Run Command — targeting them by the `Environment` tag
+this template already sets (`test`/`prod`) on `TestEC2Instance`/
+`ProdEC2Instance`. In practice that means: deploy this template once, then
+deploy the CodeBuild template **twice** — once with `Environment: test`,
+once with `Environment: prod` — pointing both at the same GitHub repo, to
+get an automatic build-and-deploy pipeline for each instance created here.
+
+See `Usask_CodeBuild_EC2_Deploy_cloudformation_template.README.md` for full
+setup steps, prerequisites (a GitHub PAT in Secrets Manager, an existing S3
+bucket), and the account/region-level constraints that apply when deploying
+it more than once (e.g. `CreateGitHubSourceCredential`).
 
 
 
