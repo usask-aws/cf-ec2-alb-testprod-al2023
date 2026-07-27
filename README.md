@@ -243,29 +243,6 @@ Using the `LoadBalancerDNSName` output value (e.g.
   **EC2 → Volumes** once you've confirmed you no longer need the data (or
   snapshot them first if you might).
 
-## Deploying real application code: pair this with the CodeBuild template
-
-This template only gets you a placeholder app (see **Before uploading**
-above) — it has no way to build or deploy your actual application code by
-itself. For that, deploy `Usask_CodeBuild_EC2_Deploy_cloudformation_template.yaml`
-as a **separate, follow-up stack** once these `test`/`prod` instances
-exist.
-
-That template provisions a CodeBuild project that pulls your app's source
-from GitHub, builds it (via the app repo's own `buildspec.yml`), uploads the
-build artifact to an S3 bucket, and deploys it onto these already-running
-instances via SSM Run Command — targeting them by the `Environment` tag
-this template already sets (`test`/`prod`) on `TestEC2Instance`/
-`ProdEC2Instance`. In practice that means: deploy this template once, then
-deploy the CodeBuild template **twice** — once with `Environment: test`,
-once with `Environment: prod` — pointing both at the same GitHub repo, to
-get an automatic build-and-deploy pipeline for each instance created here.
-
-See `Usask_CodeBuild_EC2_Deploy_cloudformation_template.README.md` for full
-setup steps, prerequisites (a GitHub PAT in Secrets Manager, an existing S3
-bucket), and the account/region-level constraints that apply when deploying
-it more than once (e.g. `CreateGitHubSourceCredential`).
-
 
 
 
