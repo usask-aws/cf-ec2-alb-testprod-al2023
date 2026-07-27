@@ -193,6 +193,10 @@ Resources:
         - HasKeyPairTest
         - !Ref KeyPairNameTest
         - !Ref AWS::NoValue
+      BlockDeviceMappings:
+        - DeviceName: /dev/xvda
+          Ebs:
+            Encrypted: true
       Monitoring: true
       MetadataOptions:
         HttpTokens: required
@@ -213,7 +217,7 @@ Resources:
             [ -e $DEVICE ] && break
             sleep 5
           done
-          MOUNT_POINT=/data
+          MOUNT_POINT=/var/www
           if ! blkid $DEVICE >/dev/null 2>&1; then
             mkfs -t xfs $DEVICE
           fi
@@ -225,9 +229,16 @@ Resources:
           dnf update -y
           dnf install -y httpd php php-cli tree
 
-          DOCROOT=$MOUNT_POINT/www/html
+          mkdir -p $MOUNT_POINT/logs
+          rm -rf /etc/httpd/logs
+          chown root:apache $MOUNT_POINT/logs
+          chmod g+w $MOUNT_POINT/logs
+          ln -s $MOUNT_POINT/logs /etc/httpd/logs
+
+          DOCROOT=$MOUNT_POINT/html
           mkdir -p $DOCROOT/test
-          sed -i "s#/var/www/html#$DOCROOT#g" /etc/httpd/conf/httpd.conf
+          chown root:apache $DOCROOT
+          chmod g+w $DOCROOT
           echo "Test Works" > $DOCROOT/index.php
           echo "OK" > $DOCROOT/health
           echo "Test Works" > $DOCROOT/test/index.php
@@ -271,6 +282,10 @@ Resources:
         - HasKeyPairProd
         - !Ref KeyPairNameProd
         - !Ref AWS::NoValue
+      BlockDeviceMappings:
+        - DeviceName: /dev/xvda
+          Ebs:
+            Encrypted: true
       Monitoring: true
       MetadataOptions:
         HttpTokens: required
@@ -291,7 +306,7 @@ Resources:
             [ -e $DEVICE ] && break
             sleep 5
           done
-          MOUNT_POINT=/data
+          MOUNT_POINT=/var/www
           if ! blkid $DEVICE >/dev/null 2>&1; then
             mkfs -t xfs $DEVICE
           fi
@@ -303,9 +318,16 @@ Resources:
           dnf update -y
           dnf install -y httpd php php-cli tree
 
-          DOCROOT=$MOUNT_POINT/www/html
+          mkdir -p $MOUNT_POINT/logs
+          rm -f /etc/httpd/logs
+          chown root:apache $MOUNT_POINT/logs
+          chmod g+w $MOUNT_POINT/logs
+          ln -s $MOUNT_POINT/logs /etc/httpd/logs
+
+          DOCROOT=$MOUNT_POINT/html
           mkdir -p $DOCROOT
-          sed -i "s#/var/www/html#$DOCROOT#g" /etc/httpd/conf/httpd.conf
+          chown root:apache $DOCROOT
+          chmod g+w $DOCROOT
           echo "Prod Works" > $DOCROOT/index.php
           echo "OK" > $DOCROOT/health
 
@@ -398,6 +420,7 @@ Resources:
       LoadBalancerArn: !Ref ApplicationLoadBalancer
       Port: 443
       Protocol: HTTPS
+      SslPolicy: ELBSecurityPolicy-TLS13-1-2-2021-06
       Certificates:
         - CertificateArn: !Ref CertificateArn
       DefaultActions:
