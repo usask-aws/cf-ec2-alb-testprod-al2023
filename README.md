@@ -448,3 +448,211 @@ To configure it after this stack is deployed:
   a replacement Web ACL) before leaving it in that state for any length of
   time.
 
+
+# cf-ec2-ssm-patch-manager.yaml
+
+Creates two AWS Systems Manager (SSM) Patch Manager Maintenance Windows that
+patch the Test and Prod EC2 instances created by
+`cf-ec2-alb-testprod-al2023.yaml` on a recurring schedule, in place (no
+instance replacement).
+
+## Optional stack: deployed separately from the EC2/ALB stack
+
+Like `cf-ec2-alb-testprod-al2023-waf.yaml`, this is a standalone stack.
+CloudFormation does not require it, and the EC2 instances function without
+it — they just never get patched after their first boot without it. It
+targets instances purely by tag (`Environment=test` / `Environment=prod` by
+default, matching the tags `cf-ec2-alb-testprod-al2023.yaml` already sets),
+so it requires **no changes** to that template.
+
+## Prerequisites
+
+- The Test/Prod EC2 instances from `cf-ec2-alb-testprod-al2023.yaml` must
+  already be running, with an instance profile that grants SSM permissions
+  (the same requirement the README's Session Manager instructions already
+  assume — e.g. `AmazonSSMManagedInstanceCore`).
+- This stack references two centrally-deployed IAM roles that already
+  exist in every managed account — created by a separate CloudFormation
+  StackSet in the `tf-aws-central-module` repo
+  (`cloudformation/cloudformation-stack-set/service-managed`), not by this
+  template:
+  - `USask_SSM_Patch_Manager_Role_DoNotDelete`, used by the patch
+    Maintenance Window Tasks.
+  - `USask_EC2_Power_On_Scheduler_Role_DoNotDelete`, used only if the
+    optional Test power-on schedule is configured.
+  This stack itself creates **no IAM role of its own**; if either central
+  role is ever missing from an account, deploying this stack will fail
+  referencing a nonexistent role ARN — that's an operational prerequisite
+  of the central StackSet being deployed first, not something this
+  template can create or work around.
+- Every named resource this stack creates (both Maintenance Windows and
+  their patch Tasks, both notification rules, the SNS topic, and the
+  power-on schedule if configured) has its console-visible **Name** suffixed
+  `-DoNotDelete`. This is a **human-readable label only** — like the two
+  centrally-deployed IAM roles above, it does not technically prevent
+  deletion. It's a deterrent against someone mistaking these for disposable
+  test resources and deleting them individually from the console. If you
+  need real, enforced protection against the whole stack being deleted,
+  enable **CloudFormation Stack → Stack actions → Termination protection**
+  after creating the stack (a stack-level setting, not something this
+  template can configure itself).
+  **Keep your stack name short**: two of these `-DoNotDelete` names land on
+  AWS resource types with a hard 64-character `Name` limit
+  (`AWS::Events::Rule` and `AWS::Scheduler::Schedule`). The longest
+  resulting name adds 36 fixed characters on top of your stack name (e.g.
+  `<StackName>-test-patch-notification-DoNotDelete`) — keep the stack name
+  under ~28 characters or stack creation will fail with a validation
+  error on that resource.
+- This stack must be deployed in the **same region** as those instances.
+  Targeting is entirely tag-based (`AWS::SSM::MaintenanceWindowTarget`
+  querying by tag), which only ever matches resources in the region the
+  stack itself is created in — deploy this in the wrong region and
+  CloudFormation won't error, the Maintenance Window will just silently
+  have zero matching targets.
+- Optional, Test-only: if the Test instance gets stopped outside business
+  hours for cost savings, set `PowerOnScheduleExpression` (a cron/rate
+  expression) and `TestInstanceId` together to automatically start it back
+  up on a schedule, via a small Amazon EventBridge Scheduler resource this
+  stack creates only when those two parameters are set. Leaving them blank
+  (the default) creates no new resources at all. This only powers
+  the instance **on** — whatever stops it again is a separate process, not
+  managed here. Schedule this with enough lead time before
+  `TestScheduleExpression` fires; starting an instance and having its SSM
+  Agent actually register can take longer than the instant EC2 reports it
+  as "running."
+
+## Deploy from the AWS Console
+
+1. Sign in to the AWS Console for the target account and switch to the
+   correct region (top-right region selector) — the same region as the
+   Test/Prod EC2 instances (see Prerequisites above).
+2. Go to the **CloudFormation** service.
+3. Click **Create stack** → **With new resources (standard)**.
+4. Under **Prerequisite - Prepare template**, select **Choose an existing
+   template**.
+5. Under **Specify template**, select **Upload a template file**, click
+   **Choose file**, and select `cf-ec2-ssm-patch-manager.yaml`. Click
+   **Next**.
+6. On **Specify stack details**:
+   - Enter a **Stack name** (e.g. `ec2-patch-manager-stack`).
+   - Fill in the parameters. This template defines console parameter
+     groups (`AWS::CloudFormation::Interface`), so they're presented in
+     the logical order below rather than alphabetically:
+
+     **Instance Targeting**
+
+     | Parameter | Notes |
+     |---|---|
+     | `InstanceTagKey` | Tag key used to find instances (default `Environment`, matches the EC2/ALB template) |
+     | `TestTagValue` | Tag value identifying the Test instance(s) (default `test`) |
+     | `ProdTagValue` | Tag value identifying the Prod instance(s) (default `prod`) |
+
+     **Patch Schedule**
+
+     | Parameter | Notes |
+     |---|---|
+     | `TestScheduleExpression` | Cron expression for the Test window (default Tuesdays 17:30) |
+     | `ProdScheduleExpression` | Cron expression for the Prod window (default Thursdays 17:30) |
+     | `ScheduleTimezone` | IANA timezone the cron expressions are evaluated in (default `America/Regina`) |
+     | `MaintenanceWindowDurationHours` | How long each window stays open, in hours (default `4`) |
+     | `MaintenanceWindowCutoffHours` | Stop starting new tasks this many hours before the window closes (default `1`) |
+
+     **Notifications**
+
+     | Parameter | Notes |
+     |---|---|
+     | `NotificationEmail` | Optional; subscribes this address to a notification after every patch run. See **How patching works** below — the notification only confirms a run happened, not whether it succeeded |
+
+     **Test Power-On Schedule (Optional)**
+
+     | Parameter | Notes |
+     |---|---|
+     | `PowerOnScheduleExpression` | Optional, Test only; cron/rate expression to automatically start the Test instance on a schedule. Leave blank (default) to disable — must be set together with `TestInstanceId` |
+     | `TestInstanceId` | Optional, Test only; the Test EC2 instance ID to start when `PowerOnScheduleExpression` fires. Required if that parameter is set, otherwise unused |
+   - Click **Next**.
+7. On **Configure stack options**, leave defaults and click **Next**.
+8. On **Review**, scroll down and confirm the stack details, then click
+   **Submit**.
+9. Wait for the stack **Status** to reach `CREATE_COMPLETE`.
+10. If you set `NotificationEmail`, check that inbox for an SNS subscription
+    confirmation email and click the confirmation link — no notifications
+    are delivered until you do.
+
+## How patching works
+
+- Every Tuesday at 17:30 (`ScheduleTimezone`), the Test window opens and
+  runs `AWS-RunPatchBaseline` against the instance(s) tagged
+  `Environment=test`: it installs whatever patches are approved and missing
+  according to the **account's default patch baseline for Amazon Linux
+  2023** (`AWS-AmazonLinux2023DefaultPatchBaseline`, unless you've
+  registered a different default in this account/region), and reboots if a
+  patch requires it.
+- Every Thursday at 17:30, the Prod window runs the same sequence against
+  the instance(s) tagged `Environment=prod`. There is **no automatic gate**
+  linking the two runs — the 2-day gap is a manual validation window, not a
+  hard dependency. If Test patching breaks something, you're expected to
+  notice (via the SNS notification and/or target health) before Thursday.
+- Every run publishes a short notification to the SNS topic
+  (`PatchNotificationTopicArn` output) via an EventBridge rule, e.g. "Test
+  environment patch window ran. Started ..., ended ...". **This message
+  deliberately does not claim the run succeeded or failed** — SSM's own
+  status reporting turned out to be unreliable at every level: it can
+  report the window as "successful" even when it found zero live targets
+  and patched nothing at all (e.g. the instance was stopped), and it can
+  just as easily report "successful" even when a real per-instance patch
+  actually failed (tolerated by the window's error threshold). Since
+  neither a real "success" nor a real "failure" can be trusted from this
+  event, the notification is just a prompt to go check for yourself:
+  after every run, open **Systems Manager → Run Command** (or the
+  Maintenance Window's **Task history** tab) for the actual per-instance
+  result and any error logs — that's the only reliable source of truth,
+  regardless of what this notification says or whether it arrives at
+  all. Subscribe an email or another endpoint to the topic if you didn't
+  set `NotificationEmail` at deploy time.
+- This stack does **not** define its own patch approval rules (classification,
+  severity, or approval delay) — it relies entirely on whatever patch
+  baseline is registered as the account/region default for AL2023. If you
+  need tighter control (e.g. Security-only, no approval delay), register a
+  custom default patch baseline for AL2023 yourself (Patch Manager console →
+  **Patch Baselines** → create one → **Actions** → **Set default baseline**)
+  before relying on this stack; `AWS-RunPatchBaseline` will pick it up
+  automatically. An earlier version of this template tried to pass a custom
+  approval policy inline via the `BaselineOverride` parameter, but that
+  parameter only accepts a reference to a JSON file in S3, not inline JSON —
+  supporting it properly would need an S3 bucket and a Lambda-backed custom
+  resource just to write that file, which was cut from scope here.
+
+## Verify the deployment in the console
+
+1. **CloudFormation** → open the stack → **Outputs** tab → note
+   `TestPatchWindowId`, `ProdPatchWindowId`, `PatchNotificationTopicArn`, and
+   `PatchManagerServiceRoleArn` (plus `TestPowerOnScheduleArn` and
+   `PowerOnSchedulerRoleArn` if you configured the optional Test power-on
+   schedule).
+2. **AWS Systems Manager** → **Maintenance Windows** → open the Test (or
+   Prod) window → **Targets** tab → confirm exactly one target is listed
+   and it resolves to the expected instance.
+3. Still on the Maintenance Window page → **Tasks** tab → select the task
+   → **Run now** (or wait for the schedule) → confirm the resulting Task
+   Invocation shows **Status: Success**, and check the SNS
+   topic/subscription for the corresponding notification.
+4. **Systems Manager** → **Patch Manager** → **Compliance** → confirm the
+   instance appears with a compliance summary after its first run.
+5. **EC2 → Target Groups** → open the affected target group → confirm the
+   instance briefly shows `unhealthy` then `healthy` again if the run
+   triggered a reboot.
+
+## Updating or deleting the stack
+
+- **Update**: select the stack in CloudFormation → **Update** → adjust
+  parameters (e.g. schedule, approval delay) → **Next** → **Submit**.
+- **Delete**: select the stack → **Delete** → confirm. This removes both
+  Maintenance Windows, their targets and tasks, the SNS topic, and (if
+  configured) the Test power-on schedule. This stack never creates an IAM
+  role of its own — the shared `USask_SSM_Patch_Manager_Role_DoNotDelete`
+  and `USask_EC2_Power_On_Scheduler_Role_DoNotDelete` roles are centrally
+  managed and unaffected by deleting this stack. **The EC2 instances
+  themselves are untouched** — deleting this stack only stops future
+  scheduled patching (and the power-on schedule, if configured), matching
+  the "optional, standalone" design of this stack.
+

@@ -1,0 +1,386 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >-
+  SSM Patch Manager Maintenance Windows that patch the Test/Prod EC2 instances
+  created by cf-ec2-alb-testprod-al2023.yaml, targeted by tag.
+
+# Without this Metadata block, the CloudFormation console always lists
+# parameters alphabetically regardless of their order in the Parameters
+# section below. ParameterGroups is the only mechanism that controls the
+# console's display order/grouping.
+Metadata:
+  AWS::CloudFormation::Interface:
+    ParameterGroups:
+      - Label:
+          default: Instance Targeting
+        Parameters:
+          - InstanceTagKey
+          - TestTagValue
+          - ProdTagValue
+      - Label:
+          default: Patch Schedule
+        Parameters:
+          - TestScheduleExpression
+          - ProdScheduleExpression
+          - ScheduleTimezone
+          - MaintenanceWindowDurationHours
+          - MaintenanceWindowCutoffHours
+      - Label:
+          default: Notifications
+        Parameters:
+          - NotificationEmail
+      - Label:
+          default: Test Power-On Schedule (Optional)
+        Parameters:
+          - PowerOnScheduleExpression
+          - TestInstanceId
+    ParameterLabels:
+      InstanceTagKey:
+        default: Instance Tag Key
+      TestTagValue:
+        default: Test Tag Value
+      ProdTagValue:
+        default: Prod Tag Value
+      TestScheduleExpression:
+        default: Test Patch Schedule (cron)
+      ProdScheduleExpression:
+        default: Prod Patch Schedule (cron)
+      ScheduleTimezone:
+        default: Schedule Timezone
+      MaintenanceWindowDurationHours:
+        default: Maintenance Window Duration (hours)
+      MaintenanceWindowCutoffHours:
+        default: Maintenance Window Cutoff (hours)
+      NotificationEmail:
+        default: Notification Email (optional)
+      PowerOnScheduleExpression:
+        default: Power-On Schedule (optional, Test only)
+      TestInstanceId:
+        default: Test Instance ID (optional)
+
+Parameters:
+  InstanceTagKey:
+    Type: String
+    Default: Environment
+    Description: 'Tag key used to find instances to patch (matches cf-ec2-alb-testprod-al2023.yaml)'
+
+  TestTagValue:
+    Type: String
+    Default: test
+    Description: 'Tag value identifying the Test instance(s)'
+
+  ProdTagValue:
+    Type: String
+    Default: prod
+    Description: 'Tag value identifying the Prod instance(s)'
+
+  TestScheduleExpression:
+    Type: String
+    Default: 'cron(30 17 ? * TUE *)'
+    Description: 'Cron expression for when the Test patch window opens'
+
+  ProdScheduleExpression:
+    Type: String
+    Default: 'cron(30 17 ? * THU *)'
+    Description: 'Cron expression for when the Prod patch window opens'
+
+  ScheduleTimezone:
+    Type: String
+    Default: America/Regina
+    Description: 'IANA timezone the cron expressions above are evaluated in'
+
+  MaintenanceWindowDurationHours:
+    Type: Number
+    Default: 4
+    MinValue: 1
+    MaxValue: 24
+    Description: 'How long each Maintenance Window stays open, in hours'
+
+  MaintenanceWindowCutoffHours:
+    Type: Number
+    Default: 1
+    MinValue: 0
+    MaxValue: 23
+    Description: 'Stop starting new tasks this many hours before the window closes. Must be less than MaintenanceWindowDurationHours, or stack creation will fail at the SSM API level (CloudFormation cannot validate this cross-parameter constraint itself)'
+
+  NotificationEmail:
+    Type: String
+    Default: ""
+    Description: 'Optional: email address to subscribe to patch run notifications'
+
+  PowerOnScheduleExpression:
+    Type: String
+    Default: ""
+    Description: 'Optional, Test only: cron/rate expression to automatically start the Test instance on a schedule (e.g. cron(0 8 ? * MON-FRI *)). Leave blank to disable this feature entirely. Must be set together with TestInstanceId'
+
+  TestInstanceId:
+    Type: String
+    Default: ""
+    Description: 'Optional, Test only: the Test EC2 instance ID to start when PowerOnScheduleExpression fires. Required if PowerOnScheduleExpression is set, otherwise unused'
+
+Conditions:
+  HasNotificationEmail: !Not [ !Equals [ !Ref NotificationEmail, "" ] ]
+  HasPowerOnSchedule: !Not [ !Equals [ !Ref PowerOnScheduleExpression, "" ] ]
+
+Resources:
+  PatchNotificationTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      TopicName: !Sub '${AWS::StackName}-patch-notifications-DoNotDelete'
+      DisplayName: EC2 Patch Manager notifications
+
+  PatchNotificationEmailSubscription:
+    Type: AWS::SNS::Subscription
+    Condition: HasNotificationEmail
+    Properties:
+      TopicArn: !Ref PatchNotificationTopic
+      Protocol: email
+      Endpoint: !Ref NotificationEmail
+
+  TestPatchWindow:
+    Type: AWS::SSM::MaintenanceWindow
+    Properties:
+      Name: !Sub '${AWS::StackName}-test-patch-window-DoNotDelete'
+      Description: !Sub 'Patches instances tagged ${InstanceTagKey}=${TestTagValue}'
+      Schedule: !Ref TestScheduleExpression
+      ScheduleTimezone: !Ref ScheduleTimezone
+      Duration: !Ref MaintenanceWindowDurationHours
+      Cutoff: !Ref MaintenanceWindowCutoffHours
+      AllowUnassociatedTargets: false
+
+  TestPatchWindowTarget:
+    Type: AWS::SSM::MaintenanceWindowTarget
+    Properties:
+      WindowId: !Ref TestPatchWindow
+      ResourceType: INSTANCE
+      Description: !Sub 'Instance(s) tagged ${InstanceTagKey}=${TestTagValue}'
+      Targets:
+        - Key: !Sub 'tag:${InstanceTagKey}'
+          Values:
+            - !Ref TestTagValue
+
+  TestPatchWindowTask:
+    Type: AWS::SSM::MaintenanceWindowTask
+    Properties:
+      Name: !Sub '${AWS::StackName}-test-patch-task-DoNotDelete'
+      WindowId: !Ref TestPatchWindow
+      TaskArn: AWS-RunPatchBaseline
+      TaskType: RUN_COMMAND
+      # Centrally-deployed role (created org-wide via a separate CloudFormation
+      # StackSet in the tf-aws-central-module repo, not by this template) — see
+      # docs/superpowers/specs/2026-07-28-centralized-patch-manager-role-design.md.
+      ServiceRoleArn: !Sub 'arn:${AWS::Partition}:iam::${AWS::AccountId}:role/USask_SSM_Patch_Manager_Role_DoNotDelete'
+      Priority: 0
+      MaxConcurrency: '1'
+      # 100% (not '1'): the target matches by tag, so if it ever covers more than
+      # one instance, one early failure shouldn't stop the rest from being patched.
+      MaxErrors: '100%'
+      Targets:
+        - Key: WindowTargetIds
+          Values:
+            - !Ref TestPatchWindowTarget
+      TaskInvocationParameters:
+        MaintenanceWindowRunCommandParameters:
+          Parameters:
+            Operation:
+              - Install
+            RebootOption:
+              - RebootIfNeeded
+
+  ProdPatchWindow:
+    Type: AWS::SSM::MaintenanceWindow
+    Properties:
+      Name: !Sub '${AWS::StackName}-prod-patch-window-DoNotDelete'
+      Description: !Sub 'Patches instances tagged ${InstanceTagKey}=${ProdTagValue}'
+      Schedule: !Ref ProdScheduleExpression
+      ScheduleTimezone: !Ref ScheduleTimezone
+      Duration: !Ref MaintenanceWindowDurationHours
+      Cutoff: !Ref MaintenanceWindowCutoffHours
+      AllowUnassociatedTargets: false
+
+  ProdPatchWindowTarget:
+    Type: AWS::SSM::MaintenanceWindowTarget
+    Properties:
+      WindowId: !Ref ProdPatchWindow
+      ResourceType: INSTANCE
+      Description: !Sub 'Instance(s) tagged ${InstanceTagKey}=${ProdTagValue}'
+      Targets:
+        - Key: !Sub 'tag:${InstanceTagKey}'
+          Values:
+            - !Ref ProdTagValue
+
+  ProdPatchWindowTask:
+    Type: AWS::SSM::MaintenanceWindowTask
+    Properties:
+      Name: !Sub '${AWS::StackName}-prod-patch-task-DoNotDelete'
+      WindowId: !Ref ProdPatchWindow
+      TaskArn: AWS-RunPatchBaseline
+      TaskType: RUN_COMMAND
+      # Centrally-deployed role (created org-wide via a separate CloudFormation
+      # StackSet in the tf-aws-central-module repo, not by this template) — see
+      # docs/superpowers/specs/2026-07-28-centralized-patch-manager-role-design.md.
+      ServiceRoleArn: !Sub 'arn:${AWS::Partition}:iam::${AWS::AccountId}:role/USask_SSM_Patch_Manager_Role_DoNotDelete'
+      Priority: 0
+      MaxConcurrency: '1'
+      # 100% (not '1'): the target matches by tag, so if it ever covers more than
+      # one instance, one early failure shouldn't stop the rest from being patched.
+      MaxErrors: '100%'
+      Targets:
+        - Key: WindowTargetIds
+          Values:
+            - !Ref ProdPatchWindowTarget
+      TaskInvocationParameters:
+        MaintenanceWindowRunCommandParameters:
+          Parameters:
+            Operation:
+              - Install
+            RebootOption:
+              - RebootIfNeeded
+
+  TestPatchNotificationRule:
+    Type: AWS::Events::Rule
+    Properties:
+      # AWS::Events::Rule Name has a hard 64-character limit. This Sub
+      # resolves to "<StackName>-test-patch-notification-DoNotDelete" (36
+      # fixed characters) - StackName must stay under ~28 characters or
+      # stack creation will fail here with a validation error.
+      Name: !Sub '${AWS::StackName}-test-patch-notification-DoNotDelete'
+      # Deliberately does not interpolate or claim the SSM-reported status
+      # (SUCCESS/FAILED) in the message below. Live testing showed that
+      # status is unreliable at every level SSM/EventBridge exposes: it can
+      # read SUCCESS even when the window found zero live targets and
+      # patched nothing, and it can also read SUCCESS at the window/task
+      # level even when a real per-instance patch actually failed (MaxErrors
+      # tolerance). There is no EventBridge event, at any level, that
+      # reliably distinguishes "actually patched" from "did nothing" or
+      # "partially failed" without querying the SSM API directly (which
+      # would need Lambda - out of scope). So this notification is
+      # deliberately just an "a run happened, go look" prompt, not a status
+      # claim - see docs/superpowers/specs/2026-07-29-patch-notification-zero-target-design.md
+      # for the full history of what was tried and why.
+      Description: !Sub 'Notifies when ${TestPatchWindow} finishes running'
+      EventPattern:
+        source:
+          - aws.ssm
+        detail-type:
+          - Maintenance Window Execution State-change Notification
+        detail:
+          window-id:
+            - !Ref TestPatchWindow
+          status:
+            - SUCCESS
+            - FAILED
+      State: ENABLED
+      Targets:
+        - Id: PatchNotificationTarget
+          Arn: !Ref PatchNotificationTopic
+          InputTransformer:
+            InputPathsMap:
+              startTime: "$.detail.start-time"
+              endTime: "$.detail.end-time"
+            InputTemplate: |
+              "Test environment patch window ran. Started <startTime>, ended <endTime>. This does not confirm patches were applied - check Systems Manager > Run Command (or the Maintenance Window's Task history) for the actual per-instance result and any error logs."
+
+  ProdPatchNotificationRule:
+    Type: AWS::Events::Rule
+    Properties:
+      # See TestPatchNotificationRule's Name comment above - same 64-character
+      # limit applies here.
+      Name: !Sub '${AWS::StackName}-prod-patch-notification-DoNotDelete'
+      # See TestPatchNotificationRule's comment above - same reasoning, Prod side.
+      Description: !Sub 'Notifies when ${ProdPatchWindow} finishes running'
+      EventPattern:
+        source:
+          - aws.ssm
+        detail-type:
+          - Maintenance Window Execution State-change Notification
+        detail:
+          window-id:
+            - !Ref ProdPatchWindow
+          status:
+            - SUCCESS
+            - FAILED
+      State: ENABLED
+      Targets:
+        - Id: PatchNotificationTarget
+          Arn: !Ref PatchNotificationTopic
+          InputTransformer:
+            InputPathsMap:
+              startTime: "$.detail.start-time"
+              endTime: "$.detail.end-time"
+            InputTemplate: |
+              "Prod environment patch window ran. Started <startTime>, ended <endTime>. This does not confirm patches were applied - check Systems Manager > Run Command (or the Maintenance Window's Task history) for the actual per-instance result and any error logs."
+
+  PatchNotificationTopicPolicy:
+    Type: AWS::SNS::TopicPolicy
+    Properties:
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: events.amazonaws.com
+            Action: sns:Publish
+            Resource: !Ref PatchNotificationTopic
+            Condition:
+              ArnEquals:
+                aws:SourceArn:
+                  - !GetAtt TestPatchNotificationRule.Arn
+                  - !GetAtt ProdPatchNotificationRule.Arn
+      Topics:
+        - !Ref PatchNotificationTopic
+
+  TestPowerOnSchedule:
+    Type: AWS::Scheduler::Schedule
+    Condition: HasPowerOnSchedule
+    Properties:
+      # No GroupName is set, so this lands in the account's default schedule
+      # group. The centrally-deployed USask_EC2_Power_On_Scheduler_Role_DoNotDelete
+      # role trusts scheduler.amazonaws.com account-wide (not scoped to a
+      # specific schedule group), so GroupName here has no effect on which
+      # schedules can assume that role.
+      # "test" is deliberately omitted from the Name (unlike this resource's
+      # logical ID) - a console-visible name containing "test" made this
+      # look like a disposable/throwaway resource, when it's a real,
+      # permanent part of this stack (it just only ever targets the Test
+      # instance functionally - see Description below for that).
+      # AWS::Scheduler::Schedule Name also has a hard 64-character limit;
+      # this Sub resolves to "<StackName>-power-on-schedule-DoNotDelete" (30
+      # fixed characters) - StackName must stay under ~34 characters.
+      Name: !Sub '${AWS::StackName}-power-on-schedule-DoNotDelete'
+      Description: !Sub 'Starts the Test instance (${TestInstanceId}) on a schedule'
+      ScheduleExpression: !Ref PowerOnScheduleExpression
+      ScheduleExpressionTimezone: !Ref ScheduleTimezone
+      FlexibleTimeWindow:
+        # Must stay quoted — "OFF" is a string value here, not a YAML boolean literal.
+        Mode: "OFF"
+      State: ENABLED
+      Target:
+        # Universal target: calls the ec2:StartInstances API directly, no Lambda.
+        Arn: !Sub 'arn:${AWS::Partition}:scheduler:::aws-sdk:ec2:startInstances'
+        # Centrally-deployed role, trusted only by scheduler.amazonaws.com
+        # (USask_EC2_Power_On_Scheduler_Role_DoNotDelete) — deliberately a
+        # separate role from the patch Tasks' USask_SSM_Patch_Manager_Role_DoNotDelete,
+        # so a schedule assuming this role can't inherit SSM SendCommand permissions.
+        RoleArn: !Sub 'arn:${AWS::Partition}:iam::${AWS::AccountId}:role/USask_EC2_Power_On_Scheduler_Role_DoNotDelete'
+        Input: !Sub '{"InstanceIds":["${TestInstanceId}"]}'
+
+Outputs:
+  PatchNotificationTopicArn:
+    Value: !Ref PatchNotificationTopic
+
+  PatchManagerServiceRoleArn:
+    Value: !Sub 'arn:${AWS::Partition}:iam::${AWS::AccountId}:role/USask_SSM_Patch_Manager_Role_DoNotDelete'
+
+  PowerOnSchedulerRoleArn:
+    Condition: HasPowerOnSchedule
+    Value: !Sub 'arn:${AWS::Partition}:iam::${AWS::AccountId}:role/USask_EC2_Power_On_Scheduler_Role_DoNotDelete'
+
+  TestPatchWindowId:
+    Value: !Ref TestPatchWindow
+
+  ProdPatchWindowId:
+    Value: !Ref ProdPatchWindow
+
+  TestPowerOnScheduleArn:
+    Condition: HasPowerOnSchedule
+    Value: !GetAtt TestPowerOnSchedule.Arn
